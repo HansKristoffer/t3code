@@ -48,6 +48,8 @@ export const ThreadTransferManifest = Schema.Struct({
     providerVersion: Schema.NullOr(TrimmedNonEmptyString),
     nativeThreadRef: OrchestrationV2ProviderRef,
     nativeConversationHeadRef: Schema.NullOr(OrchestrationV2ProviderRef),
+    /** The transfer stopped the agent mid-turn; the destination asks it to continue. */
+    wasWorking: Schema.optional(Schema.Boolean),
   }),
   repo: Schema.Struct({
     canonicalKey: Schema.NullOr(TrimmedNonEmptyString),

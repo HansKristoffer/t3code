@@ -11,7 +11,8 @@ other. Keep both connected until the transfer finishes.
 
 ## Before transferring
 
-- If the agent is working, the transfer stops it and cancels queued messages first.
+- You can transfer a thread while the agent is working. The transfer stops it and cancels queued
+  messages, and the agent continues where it left off on the destination.
 - Only threads in a Git repository can move. Transfers match projects by repository. When the
   destination has no project for it, it clones the source's `origin` remote into its projects folder
   and adds the project, using the destination's own Git credentials.
@@ -37,9 +38,9 @@ you can still fast-forward it to the source's commit as part of the transfer.
 
 ## After transferring
 
-The thread continues on the destination with its history and the provider's own session, so the
-agent remembers the conversation. The original is archived and becomes read-only, with a link to its
-copy. To move the thread back, transfer the copy.
+Your client opens the thread on the destination. It continues there with its history and the
+provider's own session, so the agent remembers the conversation. The original is archived and
+becomes read-only, with a link to its copy. To move the thread back, transfer the copy.
 
 These stay on the source:
 

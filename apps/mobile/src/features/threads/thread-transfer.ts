@@ -19,6 +19,7 @@ import { appAtomRegistry } from "../../state/atom-registry";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { environmentSession } from "../../state/session";
 import { environmentThreadShells } from "../../state/threads";
+import { waitForThreadShellReady } from "./threadForkNavigation";
 
 const threadTransferEnvironment = createThreadTransferEnvironmentAtoms(connectionAtomRuntime);
 
@@ -131,7 +132,7 @@ export async function transferThreadFromMobile(input: {
   }
   const target = await ask(
     "Transfer thread",
-    "Move this thread and its agent session to another environment. If the agent is working, it stops first. The thread continues there, and this copy becomes read-only.",
+    "Move this thread and its agent session to another environment. If the agent is working, it pauses here and picks up again there. This copy becomes read-only.",
     [
       ...targets.map((entry) => ({ text: entry.label, value: entry })),
       { text: "Cancel", value: null, style: "cancel" as const },
@@ -200,13 +201,13 @@ export async function transferThreadFromMobile(input: {
         onStep: () => undefined,
       });
     }
-    Alert.alert("Thread transferred", `It continues on ${target.label}.`, [
-      { text: "Done", style: "cancel" },
-      {
-        text: "Open",
-        onPress: () => input.openThread({ environmentId: target.environmentId, threadId }),
-      },
-    ]);
+    const destination = { environmentId: target.environmentId, threadId };
+    await waitForThreadShellReady({
+      read: () =>
+        appAtomRegistry.get(environmentThreadShells.threadShellAtom(destination)) !== null,
+      timeoutMs: 5_000,
+    });
+    input.openThread(destination);
   } catch (error) {
     Alert.alert(
       "Transfer failed",

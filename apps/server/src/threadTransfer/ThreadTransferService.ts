@@ -1,6 +1,7 @@
 import {
   CommandId,
   EventId,
+  MessageId,
   THREAD_TRANSFER_MAX_BUNDLE_BYTES,
   ThreadId,
   ThreadTransferError,
@@ -260,7 +261,10 @@ const make = Effect.gen(function* () {
     yield* removeExport(input.transferId);
   });
 
-  /** Cancels queued messages and interrupts the running turn, so the thread can be locked. */
+  /**
+   * Cancels queued messages and interrupts the running turn, so the thread
+   * can be locked. True when it stopped a turn the destination should continue.
+   */
   const stopWork = Effect.fn("ThreadTransferService.stopWork")(function* (input: {
     readonly projectId: ProjectId;
     readonly threadId: ThreadId;
@@ -286,7 +290,7 @@ const make = Effect.gen(function* () {
         reason: "Transferring the thread to another environment.",
       })
       .pipe(orFail("Could not stop the thread."));
-    if (interrupted.type !== "interrupt_requested") return;
+    if (interrupted.type !== "interrupt_requested") return false;
     const waited = yield* threads
       .waitForThread({
         projectId: input.projectId,
@@ -298,6 +302,7 @@ const make = Effect.gen(function* () {
     if (waited.timedOut) {
       return yield* fail("The thread did not stop in time. Try again.");
     }
+    return true;
   });
 
   const readRepoState = Effect.fn("ThreadTransferService.readRepoState")(function* (
@@ -368,13 +373,13 @@ const make = Effect.gen(function* () {
     const project = yield* getProject(thread.projectId);
     const cwd = thread.worktreePath ?? project.workspaceRoot;
 
-    if (thread.transfer == null) {
-      yield* stopWork({
+    const wasWorking =
+      thread.transfer == null &&
+      (yield* stopWork({
         projectId: thread.projectId,
         threadId: input.threadId,
         transferId: input.transferId,
-      });
-    }
+      }));
     yield* dispatch({
       type: "thread.transfer-out.begin",
       commandId: CommandId.make(`thread-transfer:${input.transferId}:begin`),
@@ -462,6 +467,7 @@ const make = Effect.gen(function* () {
           providerVersion: provider?.version ?? null,
           nativeThreadRef: providerThread.nativeThreadRef!,
           nativeConversationHeadRef: providerThread.nativeConversationHeadRef,
+          wasWorking,
         },
         repo,
         itemCount: items.length,
@@ -804,6 +810,35 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  /** Restarts the turn the transfer stopped on the source, best effort. */
+  const continueImportedWork = (input: {
+    readonly threadId: ThreadId;
+    readonly transferId: ThreadTransferId;
+    readonly manifest: ThreadTransferManifest;
+  }) =>
+    input.manifest.source.wasWorking !== true
+      ? Effect.void
+      : threads
+          .dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make(`thread-transfer:${input.transferId}:continue`),
+            threadId: input.threadId,
+            messageId: MessageId.make(`message:thread-transfer-continuation:${input.transferId}`),
+            text: "Continue where you left off.",
+            attachments: [],
+            dispatchMode: { type: "start_immediately" },
+            createdBy: "agent",
+            creationSource: "server",
+          })
+          .pipe(
+            // The thread already moved; failing here would leave the source locked
+            // over a message the user can send themselves.
+            Effect.tapCause((cause) =>
+              Effect.logWarning("Could not continue the transferred thread.", cause),
+            ),
+            Effect.ignore,
+          );
+
   const importThread: ThreadTransferServiceShape["importThread"] = Effect.fn(
     "ThreadTransferService.importThread",
   )(function* (input) {
@@ -1010,6 +1045,7 @@ const make = Effect.gen(function* () {
       },
     ];
     yield* eventSink.write({ events }).pipe(orFail("Could not save the imported thread."));
+    yield* continueImportedWork({ threadId, transferId: input.transferId, manifest });
     yield* Effect.forEach(
       [paths.staging, paths.inBundle],
       (file) => fileSystem.remove(file, { recursive: true, force: true }).pipe(Effect.ignore),
