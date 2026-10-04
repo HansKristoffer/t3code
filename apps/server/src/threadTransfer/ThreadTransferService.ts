@@ -63,7 +63,12 @@ import {
   writeBundle,
   type BundleSourceFile,
 } from "./ThreadTransferBundle.ts";
-import { applyCodeSnapshot, fetchCodeSnapshot, pushCodeSnapshot } from "./ThreadTransferCode.ts";
+import {
+  applyCodeSnapshot,
+  fetchCodeSnapshot,
+  pushCodeSnapshot,
+  stashTransferredCode,
+} from "./ThreadTransferCode.ts";
 import { issueThreadTransferUploadUrl, threadTransferPaths } from "./ThreadTransferFiles.ts";
 import { attachmentsOf, exportableTurnItems, importedHistory } from "./ThreadTransferHistory.ts";
 
@@ -219,10 +224,16 @@ const make = Effect.gen(function* () {
       { discard: true },
     );
 
-  /** Deletes the code snapshot the export pushed; the destination has fetched it or never will. */
-  const deleteSnapshot = (input: {
+  /**
+   * Cleans up the code snapshot the export pushed, once the destination has
+   * fetched it or never will. With `stashMessage`, the destination took the
+   * uncommitted files, so a thread in its own worktree parks them in a stash
+   * and leaves the worktree clean for the thread's return.
+   */
+  const settleSnapshot = (input: {
     readonly threadId: ThreadId;
     readonly transferId: ThreadTransferId;
+    readonly stashMessage?: string;
   }) =>
     Effect.gen(function* () {
       const cached = yield* fileSystem.readFileString(pathsFor(input.transferId).outResult).pipe(
@@ -233,13 +244,24 @@ const make = Effect.gen(function* () {
       if (snapshot == null) return;
       const thread = yield* orchestrator.getThreadShell(input.threadId);
       if (thread === null) return;
+      // The project checkout is shared with other threads, so only a thread's own worktree is stashed.
+      if (input.stashMessage !== undefined && thread.worktreePath !== null) {
+        yield* stashTransferredCode({
+          git: gitOutput,
+          fileSystem,
+          path,
+          cwd: thread.worktreePath,
+          snapshot,
+          message: input.stashMessage,
+        });
+      }
       const cwd = thread.worktreePath ?? (yield* getProject(thread.projectId)).workspaceRoot;
       yield* gitOutput(cwd, ["push", "--no-verify", "origin", "--delete", snapshot.ref]);
     }).pipe(Effect.ignore);
 
   const abort: ThreadTransferServiceShape["abort"] = Effect.fn("ThreadTransferService.abort")(
     function* (input) {
-      yield* deleteSnapshot(input);
+      yield* settleSnapshot(input);
       yield* dispatch({
         type: "thread.transfer-out.abort",
         commandId: CommandId.make(`thread-transfer:${input.transferId}:abort`),
@@ -260,7 +282,14 @@ const make = Effect.gen(function* () {
       transferId: input.transferId,
       destination: input.destination,
     });
-    yield* deleteSnapshot(input);
+    const label = input.destination.environmentLabel ?? "another environment";
+    yield* settleSnapshot({
+      threadId: input.threadId,
+      transferId: input.transferId,
+      ...(input.sourceCodeApplied === true
+        ? { stashMessage: `T3 Code: transferred to ${label} (${input.transferId})` }
+        : {}),
+    });
     yield* removeExport(input.transferId);
   });
 
@@ -843,9 +872,7 @@ const make = Effect.gen(function* () {
               type: "message.dispatch",
               commandId: CommandId.make(`thread-transfer:${input.transferId}:continue`),
               threadId: input.threadId,
-              messageId: MessageId.make(
-                `message:thread-transfer-continuation:${input.transferId}`,
-              ),
+              messageId: MessageId.make(`message:thread-transfer-continuation:${input.transferId}`),
               text: "Continue where you left off.",
               attachments: [],
               dispatchMode: { type: "start_immediately" },
@@ -866,9 +893,7 @@ const make = Effect.gen(function* () {
         : null;
       if (setup?.status === "started" && !setup.async && setup.completion !== undefined) {
         // The agent continues even if setup fails; it can see and fix that itself.
-        yield* Effect.forkDetach(
-          setup.completion.pipe(Effect.andThen(continueWork), logFailure),
-        );
+        yield* Effect.forkDetach(setup.completion.pipe(Effect.andThen(continueWork), logFailure));
         return;
       }
       yield* continueWork;
@@ -933,8 +958,11 @@ const make = Effect.gen(function* () {
 
     const workspace = yield* realizeWorkspace(project.workspaceRoot, workspacePlan);
     const snapshot = manifest.repo.snapshot ?? null;
-    if (checks.carriesSourceCode === true && snapshot != null && manifest.repo.headSha !== null) {
-      yield* applyCodeSnapshot(gitOutput, workspace.cwd, manifest.repo.headSha, snapshot);
+    const sourceHead = manifest.repo.headSha;
+    const sourceCodeApplied =
+      checks.carriesSourceCode === true && snapshot != null && sourceHead !== null;
+    if (sourceCodeApplied) {
+      yield* applyCodeSnapshot(gitOutput, workspace.cwd, sourceHead, snapshot);
     } else if (input.fastForwardToSource && manifest.repo.headSha !== null) {
       const merged = yield* gitOutput(workspace.cwd, ["merge", "--ff-only", manifest.repo.headSha]);
       if (merged === null) {
@@ -1084,11 +1112,11 @@ const make = Effect.gen(function* () {
     ];
     yield* eventSink.write({ events }).pipe(orFail("Could not save the imported thread."));
     yield* resumeImportedThread({
-        threadId,
-        transferId: input.transferId,
-        manifest,
-        project,
-        cwd: workspace.cwd,
+      threadId,
+      transferId: input.transferId,
+      manifest,
+      project,
+      cwd: workspace.cwd,
       freshWorkspace: cloned || workspacePlan.type === "worktree",
     });
     yield* Effect.forEach(
@@ -1096,7 +1124,7 @@ const make = Effect.gen(function* () {
       (file) => fileSystem.remove(file, { recursive: true, force: true }).pipe(Effect.ignore),
       { discard: true },
     );
-    return { threadId };
+    return { threadId, sourceCodeApplied };
   });
 
   return ThreadTransferService.of({

@@ -181,6 +181,7 @@ export async function completeThreadTransfer(
     readonly targetEnvironmentId: EnvironmentId;
     readonly transferId: ThreadTransferId;
     readonly destinationLabel?: string | undefined;
+    readonly sourceCodeApplied?: boolean | undefined;
   },
 ): Promise<ThreadId> {
   const threadId = importedTransferThreadId(input.transferId);
@@ -196,6 +197,9 @@ export async function completeThreadTransfer(
           threadId,
           ...(label ? { environmentLabel: label } : {}),
         },
+        ...(input.sourceCodeApplied === undefined
+          ? {}
+          : { sourceCodeApplied: input.sourceCodeApplied }),
       });
       return threadId;
     } catch (error) {
@@ -251,14 +255,15 @@ export async function finishThreadTransfer(
     throw new ThreadTransferFailure(failureMessage(error), false);
   }
   options.onStep("importing");
+  let sourceCodeApplied: boolean | undefined;
   try {
-    await call(deps, deps.atoms.importThread, targetEnvironmentId, {
+    ({ sourceCodeApplied } = await call(deps, deps.atoms.importThread, targetEnvironmentId, {
       transferId,
       projectId: preflight.projectId,
       instanceId: preflight.instanceId,
       workspace: preflight.workspace,
       fastForwardToSource: options.fastForwardToSource,
-    });
+    }));
   } catch (error) {
     throw new ThreadTransferFailure(failureMessage(error), true);
   }
@@ -268,5 +273,6 @@ export async function finishThreadTransfer(
     targetEnvironmentId,
     transferId,
     destinationLabel: options.destinationLabel,
+    sourceCodeApplied,
   });
 }

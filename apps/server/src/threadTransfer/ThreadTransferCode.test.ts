@@ -14,6 +14,7 @@ import {
   applyCodeSnapshot,
   fetchCodeSnapshot,
   pushCodeSnapshot,
+  stashTransferredCode,
   type GitRun,
 } from "./ThreadTransferCode.ts";
 
@@ -113,6 +114,87 @@ describe("ThreadTransferCode", () => {
         dirty: false,
       });
       assert.isNull(snapshot);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("leaves the source clean after the move so the code can come back", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const { source, destination } = repos();
+      const send = (from: string, transferId: string) =>
+        pushCodeSnapshot({
+          git,
+          fileSystem,
+          path,
+          cwd: from,
+          transferId,
+          headSha: run(from, "rev-parse", "HEAD"),
+          dirty: run(from, "status", "--porcelain") !== "",
+        });
+
+      // A to B: A's edit moves, and A parks it.
+      NodeFS.writeFileSync(NodePath.join(source, "kept.txt"), "started on A\n");
+      const outbound = (yield* send(source, "t-out"))!;
+      assert.isTrue(yield* fetchCodeSnapshot(git, destination, outbound));
+      yield* applyCodeSnapshot(git, destination, run(source, "rev-parse", "HEAD"), outbound);
+      assert.isTrue(
+        yield* stashTransferredCode({
+          git,
+          fileSystem,
+          path,
+          cwd: source,
+          snapshot: outbound,
+          message: "T3 Code: transferred to B (t-out)",
+        }),
+      );
+      assert.equal(run(source, "status", "--porcelain"), "");
+      assert.include(run(source, "stash", "list"), "T3 Code: transferred to B (t-out)");
+
+      // B finishes the work and sends it back; A's clean checkout takes it.
+      NodeFS.writeFileSync(NodePath.join(destination, "kept.txt"), "finished on B\n");
+      run(destination, "commit", "--quiet", "-am", "finish on B");
+      NodeFS.writeFileSync(NodePath.join(destination, "notes.txt"), "uncommitted on B\n");
+      const inbound = (yield* send(destination, "t-back"))!;
+      assert.isTrue(yield* fetchCodeSnapshot(git, source, inbound));
+      yield* applyCodeSnapshot(git, source, run(destination, "rev-parse", "HEAD"), inbound);
+      assert.equal(run(source, "rev-parse", "HEAD"), run(destination, "rev-parse", "HEAD"));
+      assert.equal(
+        NodeFS.readFileSync(NodePath.join(source, "kept.txt"), "utf8"),
+        "finished on B\n",
+      );
+      assert.equal(
+        NodeFS.readFileSync(NodePath.join(source, "notes.txt"), "utf8"),
+        "uncommitted on B\n",
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("keeps edits made on the source after the snapshot", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const { source } = repos();
+      NodeFS.writeFileSync(NodePath.join(source, "kept.txt"), "sent\n");
+      const snapshot = (yield* pushCodeSnapshot({
+        git,
+        fileSystem,
+        path,
+        cwd: source,
+        transferId: "t-3",
+        headSha: run(source, "rev-parse", "HEAD"),
+        dirty: true,
+      }))!;
+      // This edit exists only here, so nothing is stashed.
+      NodeFS.writeFileSync(NodePath.join(source, "kept.txt"), "edited after sending\n");
+      assert.isFalse(
+        yield* stashTransferredCode({ git, fileSystem, path, cwd: source, snapshot, message: "x" }),
+      );
+      assert.equal(
+        NodeFS.readFileSync(NodePath.join(source, "kept.txt"), "utf8"),
+        "edited after sending\n",
+      );
+      assert.equal(run(source, "stash", "list"), "");
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

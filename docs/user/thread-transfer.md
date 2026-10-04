@@ -31,6 +31,12 @@ destination moves its checkout to the source's commit and restores those files a
 changes. The temporary ref is deleted when the transfer finishes. Files your `.gitignore` excludes,
 such as `.env`, are not carried.
 
+When the thread ran in its own worktree, the source then moves its copy of those uncommitted files
+into a stash named `T3 Code: transferred to <environment>`. The worktree is left clean, so when you
+transfer the thread back, it takes the code returning from the destination. Run `git stash list` in
+that worktree to find the stash. Edits you make on the source after the transfer starts are not
+stashed.
+
 The destination keeps its own code instead, and warns you, when its checkout has uncommitted
 changes, is on another branch, or has commits the source does not. If the source cannot push, for
 example without write access to `origin`, the destination warns about what stays behind. When the

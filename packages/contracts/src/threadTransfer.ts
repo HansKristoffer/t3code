@@ -178,13 +178,22 @@ export const ThreadTransferImportInput = Schema.Struct({
 });
 export type ThreadTransferImportInput = typeof ThreadTransferImportInput.Type;
 
-export const ThreadTransferImportResult = Schema.Struct({ threadId: ThreadId });
+export const ThreadTransferImportResult = Schema.Struct({
+  threadId: ThreadId,
+  /** The destination now has the source's uncommitted files. Unknown on a retried import. */
+  sourceCodeApplied: Schema.optional(Schema.Boolean),
+});
 export type ThreadTransferImportResult = typeof ThreadTransferImportResult.Type;
 
 export const ThreadTransferCompleteInput = Schema.Struct({
   threadId: ThreadId,
   transferId: ThreadTransferId,
   destination: OrchestrationV2ThreadTransferPeer,
+  /**
+   * The destination took the source's uncommitted files, so the source parks
+   * them in a stash and leaves its worktree clean for the thread's return.
+   */
+  sourceCodeApplied: Schema.optional(Schema.Boolean),
 });
 export type ThreadTransferCompleteInput = typeof ThreadTransferCompleteInput.Type;
 
