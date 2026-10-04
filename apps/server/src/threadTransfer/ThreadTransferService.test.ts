@@ -452,7 +452,13 @@ it.layer(TestLayer)("ThreadTransferService", (it) => {
         imported.visibleTurnItems
           .filter(({ item }) => item.runId === null)
           .map(({ item }) => item.type),
-        ["user_message", "assistant_message", "user_message", "run_interrupt_result"],
+        [
+          "user_message",
+          "assistant_message",
+          "user_message",
+          "run_interrupt_result",
+          "system_notice",
+        ],
       );
       // The source was working, so its copy picks the turn back up.
       assert.deepEqual(
@@ -548,11 +554,15 @@ it.layer(TestLayer)("ThreadTransferService", (it) => {
         assert.isNotNull(source?.archivedAt);
         const arrived = yield* orchestrator.getThreadProjection(threadId);
         assert.equal(arrived.thread.historyOrigin, "transfer");
+        // The same conversation, with a note for every move so far.
         assert.deepEqual(
-          arrived.visibleTurnItems.map(({ item }) => [item.type, item.runId]),
+          arrived.visibleTurnItems.map(({ item }) =>
+            item.type === "system_notice" ? item.message : item.type,
+          ),
           [
-            ["user_message", null],
-            ["assistant_message", null],
+            "user_message",
+            "assistant_message",
+            ...Array.from({ length: trip }, () => "Transferred from Laptop to Laptop"),
           ],
         );
         // The session record now belongs to the newest copy, which can resume it.

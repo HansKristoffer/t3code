@@ -46,7 +46,8 @@ you can still fast-forward it to the source's commit as part of the transfer.
 ## After transferring
 
 Your client opens the thread on the destination. It continues there with its history and the
-provider's own session, so the agent remembers the conversation. The original is archived and
+provider's own session, so the agent remembers the conversation. A note in the conversation marks
+each move, such as "Transferred from Laptop to Server". The original is archived and
 becomes read-only, with a link to its copy. To move the thread back, transfer the copy.
 
 These stay on the source:

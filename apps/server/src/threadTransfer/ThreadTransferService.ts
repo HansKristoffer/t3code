@@ -6,6 +6,7 @@ import {
   ThreadId,
   ThreadTransferError,
   ThreadTransferManifest,
+  TurnItemId,
   NonNegativeInt,
   ProjectId,
   type ChatAttachment,
@@ -13,6 +14,7 @@ import {
   type OrchestrationV2AppThread,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ProviderThread,
+  type OrchestrationV2TurnItem,
   type ThreadTransferAbortInput,
   type ThreadTransferCheck,
   type ThreadTransferCompleteInput,
@@ -1020,6 +1022,29 @@ const make = Effect.gen(function* () {
       remapAttachment: (attachment) => remapped.get(attachment.id) ?? null,
     });
     const now = yield* DateTime.now;
+    const here = (yield* serverEnvironment.getDescriptor).label.trim();
+    const transferMessage = `Transferred from ${
+      manifest.source.environmentLabel ?? "another environment"
+    } to ${here === "" ? "this environment" : here}`;
+    // Marks where the conversation changed machines; later trips carry it along like any note.
+    const transferNotice: OrchestrationV2TurnItem = {
+      id: TurnItemId.make(`transfer:${input.transferId}:notice`),
+      threadId,
+      runId: null,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: history.turnItems.length + 1,
+      type: "system_notice",
+      status: "completed",
+      title: transferMessage,
+      message: transferMessage,
+      startedAt: now,
+      completedAt: now,
+      updatedAt: now,
+    };
     const driver = manifest.source.driver;
     const providerThreadId = idAllocator.derive.providerThread({
       driver,
@@ -1093,7 +1118,7 @@ const make = Effect.gen(function* () {
         occurredAt: message.updatedAt,
         payload: message,
       })),
-      ...history.turnItems.map((item): OrchestrationV2DomainEvent => ({
+      ...[...history.turnItems, transferNotice].map((item): OrchestrationV2DomainEvent => ({
         id: eventId(`item:${item.id}`),
         type: "turn-item.updated",
         threadId,
