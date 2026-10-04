@@ -54,6 +54,13 @@ These stay on the source:
 - Diffs and rewinds for turns before the transfer
 - Running background tasks and machine-local MCP servers
 
+## Letting agents transfer threads
+
+Agents can move threads too, through the T3 Code tools available to them. Ask the agent, for
+example, to "continue this on the server". It stops there and continues on the destination, the same
+as when you transfer the thread yourself. A T3 Code app connected to both environments must be
+open, such as the desktop app on your computer. It carries the move and shows its progress.
+
 ## If a transfer does not finish
 
 If a transfer stops partway, the original shows **Finish transfer** and **Unlock**. Finish picks up

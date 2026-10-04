@@ -245,6 +245,7 @@ import {
 } from "@t3tools/shared/usageLimits";
 import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
 import * as AgentSessionImporter from "./project/AgentSessionImporter.ts";
+import * as ThreadTransferBroker from "./threadTransfer/ThreadTransferBroker.ts";
 import * as ThreadTransferService from "./threadTransfer/ThreadTransferService.ts";
 import * as RepositoryProjects from "./project/RepositoryProjects.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
@@ -1182,6 +1183,7 @@ const makeWsRpcLayer = (
   clientOrigin: OrchestrationClientOrigin,
   clientAnalyticsProps: Readonly<Record<string, unknown>>,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
+  threadTransferBroker: ThreadTransferBroker.ThreadTransferBroker["Service"],
 ) =>
   ServerWsRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -3197,6 +3199,24 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.threadTransferAbort, threadTransfer.abort(input), {
             "rpc.aggregate": "orchestration",
           }),
+        [WS_METHODS.threadTransferCarry]: (input) =>
+          observeRpcStream(
+            WS_METHODS.threadTransferCarry,
+            Stream.unwrap(threadTransferBroker.carry(input)),
+            {
+              "rpc.aggregate": "orchestration",
+            },
+          ),
+        [WS_METHODS.threadTransferClaim]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.threadTransferClaim,
+            threadTransferBroker.claim(input).pipe(Effect.map((granted) => ({ granted }))),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [WS_METHODS.threadTransferReport]: (input) =>
+          observeRpcEffect(WS_METHODS.threadTransferReport, threadTransferBroker.report(input), {
+            "rpc.aggregate": "orchestration",
+          }),
         [WS_METHODS.assetsCreateUrl]: (input) =>
           observeRpcEffect(
             WS_METHODS.assetsCreateUrl,
@@ -3815,6 +3835,7 @@ const makeWsRpcLayer = (
 export const websocketRpcRouteLayer = Layer.unwrap(
   Effect.gen(function* () {
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
+    const threadTransferBroker = yield* ThreadTransferBroker.ThreadTransferBroker;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
     const sql = yield* SqlClient.SqlClient;
@@ -3868,6 +3889,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               clientOrigin,
               clientAnalyticsProps,
               previewAutomationBroker,
+              threadTransferBroker,
             ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),

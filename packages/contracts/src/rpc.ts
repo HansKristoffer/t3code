@@ -344,6 +344,10 @@ import {
 } from "./project.ts";
 import {
   ThreadTransferAbortInput,
+  ThreadTransferCarrier,
+  ThreadTransferCarryRequest,
+  ThreadTransferClaimInput,
+  ThreadTransferClaimResult,
   ThreadTransferCompleteInput,
   ThreadTransferCreateUploadUrlInput,
   ThreadTransferCreateUploadUrlResult,
@@ -354,6 +358,7 @@ import {
   ThreadTransferImportResult,
   ThreadTransferPreflightInput,
   ThreadTransferPreflightResult,
+  ThreadTransferReportInput,
 } from "./threadTransfer.ts";
 
 export const WS_METHODS = {
@@ -390,6 +395,9 @@ export const WS_METHODS = {
   threadTransferImport: "threadTransfer.import",
   threadTransferComplete: "threadTransfer.complete",
   threadTransferAbort: "threadTransfer.abort",
+  threadTransferCarry: "threadTransfer.carry",
+  threadTransferClaim: "threadTransfer.claim",
+  threadTransferReport: "threadTransfer.report",
 
   // Provider methods
   providerUploadFeedback: "provider.uploadFeedback",
@@ -1294,6 +1302,24 @@ const WsThreadTransferAbortRpc = Rpc.make(WS_METHODS.threadTransferAbort, {
   error: ThreadTransferRpcError,
 });
 
+const WsThreadTransferCarryRpc = Rpc.make(WS_METHODS.threadTransferCarry, {
+  payload: ThreadTransferCarrier,
+  success: ThreadTransferCarryRequest,
+  error: ThreadTransferRpcError,
+  stream: true,
+});
+
+const WsThreadTransferClaimRpc = Rpc.make(WS_METHODS.threadTransferClaim, {
+  payload: ThreadTransferClaimInput,
+  success: ThreadTransferClaimResult,
+  error: ThreadTransferRpcError,
+});
+
+const WsThreadTransferReportRpc = Rpc.make(WS_METHODS.threadTransferReport, {
+  payload: ThreadTransferReportInput,
+  error: ThreadTransferRpcError,
+});
+
 const WsProviderUploadFeedbackRpc = Rpc.make(WS_METHODS.providerUploadFeedback, {
   payload: ProviderUploadFeedbackInput,
   success: ProviderUploadFeedbackResult,
@@ -1888,6 +1914,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsThreadTransferImportRpc,
   WsThreadTransferCompleteRpc,
   WsThreadTransferAbortRpc,
+  WsThreadTransferCarryRpc,
+  WsThreadTransferClaimRpc,
+  WsThreadTransferReportRpc,
   WsProviderUploadFeedbackRpc,
   WsSubscribeVcsStatusRpc,
   WsSubscribeWorktreeSetupRpc,
