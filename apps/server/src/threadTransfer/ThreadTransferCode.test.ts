@@ -117,7 +117,7 @@ describe("ThreadTransferCode", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("leaves the source clean after the move so the code can come back", () =>
+  it.effect("moves the code A to B to A to B, each side left clean for the next trip", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -165,6 +165,35 @@ describe("ThreadTransferCode", () => {
       );
       assert.equal(
         NodeFS.readFileSync(NodePath.join(source, "notes.txt"), "utf8"),
+        "uncommitted on B\n",
+      );
+
+      // B parks what it sent, so it can take the thread again.
+      assert.isTrue(
+        yield* stashTransferredCode({
+          git,
+          fileSystem,
+          path,
+          cwd: destination,
+          snapshot: inbound,
+          message: "T3 Code: transferred to A (t-back)",
+        }),
+      );
+      assert.equal(run(destination, "status", "--porcelain"), "");
+
+      // A adjusts the work and hands it to B once more.
+      NodeFS.writeFileSync(NodePath.join(source, "kept.txt"), "adjusted on A\n");
+      run(source, "commit", "--quiet", "-am", "adjust on A");
+      const again = (yield* send(source, "t-again"))!;
+      assert.isTrue(yield* fetchCodeSnapshot(git, destination, again));
+      yield* applyCodeSnapshot(git, destination, run(source, "rev-parse", "HEAD"), again);
+      assert.equal(run(destination, "rev-parse", "HEAD"), run(source, "rev-parse", "HEAD"));
+      assert.equal(
+        NodeFS.readFileSync(NodePath.join(destination, "kept.txt"), "utf8"),
+        "adjusted on A\n",
+      );
+      assert.equal(
+        NodeFS.readFileSync(NodePath.join(destination, "notes.txt"), "utf8"),
         "uncommitted on B\n",
       );
     }).pipe(Effect.provide(NodeServices.layer)),
