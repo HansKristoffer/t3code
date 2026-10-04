@@ -161,7 +161,7 @@ export async function transferThreadFromMobile(input: {
         targetEnvironmentId: target.environmentId,
         transferId,
       });
-      const { blockers, warnings, canFastForward } = prepared.preflight;
+      const { blockers, warnings } = prepared.preflight;
       if (blockers.length > 0) {
         Alert.alert(
           `${target.label} can't take the thread yet`,
@@ -182,9 +182,6 @@ export async function transferThreadFromMobile(input: {
         ].join("\n\n"),
         [
           { text: "Cancel", value: null, style: "cancel" as const },
-          ...(canFastForward
-            ? [{ text: "Fast-forward and transfer", value: "fast-forward" as const }]
-            : []),
           {
             text: warnings.length > 0 ? "Transfer anyway" : "Transfer",
             value: "transfer" as const,
@@ -196,7 +193,6 @@ export async function transferThreadFromMobile(input: {
         return;
       }
       threadId = await finishThreadTransfer(deps, prepared, {
-        fastForwardToSource: choice === "fast-forward",
         destinationLabel: target.label,
         onStep: () => undefined,
       });

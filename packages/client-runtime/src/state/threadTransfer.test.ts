@@ -22,7 +22,7 @@ const ready: ThreadTransferPreflightResult = {
   newProject: null,
   instanceId: "codex" as never,
   workspace: { type: "root" },
-  canFastForward: false,
+  carriesSourceCode: true,
 };
 
 function harness(
@@ -78,7 +78,6 @@ const run = async (failing: ReadonlyArray<keyof ThreadTransferAtoms | "move">) =
     transferId: "x",
   });
   const outcome = await finishThreadTransfer(deps, prepared, {
-    fastForwardToSource: false,
     onStep: () => undefined,
   }).catch((error: { message: string; sourceLocked: boolean }) => error);
   return { outcome, calls };

@@ -11,7 +11,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
 import {
-  applyCodeSnapshot,
+  moveToSourceCode,
   fetchCodeSnapshot,
   pushCodeSnapshot,
   stashTransferredCode,
@@ -90,7 +90,7 @@ describe("ThreadTransferCode", () => {
       assert.equal(run(source, "rev-parse", "origin/main"), run(destination, "rev-parse", "HEAD"));
 
       assert.isTrue(yield* fetchCodeSnapshot(git, destination, snapshot!));
-      yield* applyCodeSnapshot(git, destination, headSha, snapshot!);
+      yield* moveToSourceCode(git, destination, headSha, snapshot!);
       assert.equal(run(destination, "rev-parse", "HEAD"), headSha);
       assert.equal(NodeFS.readFileSync(NodePath.join(destination, "kept.txt"), "utf8"), "edited\n");
       assert.isFalse(NodeFS.existsSync(NodePath.join(destination, "removed.txt")));
@@ -99,6 +99,23 @@ describe("ThreadTransferCode", () => {
         "untracked\n",
       );
     }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("moves a destination that is only behind to the source's pushed commit", () =>
+    Effect.gen(function* () {
+      const { source, destination } = repos();
+      NodeFS.writeFileSync(NodePath.join(source, "kept.txt"), "pushed from A\n");
+      run(source, "commit", "--quiet", "-am", "pushed");
+      run(source, "push", "--quiet", "origin", "main");
+      // Nothing is unpushed or uncommitted, so there is no snapshot; the branch fetch brings the commit.
+      run(destination, "fetch", "--quiet", "origin", "main");
+      yield* moveToSourceCode(git, destination, run(source, "rev-parse", "HEAD"), null);
+      assert.equal(run(destination, "rev-parse", "HEAD"), run(source, "rev-parse", "HEAD"));
+      assert.equal(
+        NodeFS.readFileSync(NodePath.join(destination, "kept.txt"), "utf8"),
+        "pushed from A\n",
+      );
+    }),
   );
 
   it.effect("pushes nothing when origin already has the source's clean checkout", () =>
@@ -137,7 +154,7 @@ describe("ThreadTransferCode", () => {
       NodeFS.writeFileSync(NodePath.join(source, "kept.txt"), "started on A\n");
       const outbound = (yield* send(source, "t-out"))!;
       assert.isTrue(yield* fetchCodeSnapshot(git, destination, outbound));
-      yield* applyCodeSnapshot(git, destination, run(source, "rev-parse", "HEAD"), outbound);
+      yield* moveToSourceCode(git, destination, run(source, "rev-parse", "HEAD"), outbound);
       assert.isTrue(
         yield* stashTransferredCode({
           git,
@@ -157,7 +174,7 @@ describe("ThreadTransferCode", () => {
       NodeFS.writeFileSync(NodePath.join(destination, "notes.txt"), "uncommitted on B\n");
       const inbound = (yield* send(destination, "t-back"))!;
       assert.isTrue(yield* fetchCodeSnapshot(git, source, inbound));
-      yield* applyCodeSnapshot(git, source, run(destination, "rev-parse", "HEAD"), inbound);
+      yield* moveToSourceCode(git, source, run(destination, "rev-parse", "HEAD"), inbound);
       assert.equal(run(source, "rev-parse", "HEAD"), run(destination, "rev-parse", "HEAD"));
       assert.equal(
         NodeFS.readFileSync(NodePath.join(source, "kept.txt"), "utf8"),
@@ -186,7 +203,7 @@ describe("ThreadTransferCode", () => {
       run(source, "commit", "--quiet", "-am", "adjust on A");
       const again = (yield* send(source, "t-again"))!;
       assert.isTrue(yield* fetchCodeSnapshot(git, destination, again));
-      yield* applyCodeSnapshot(git, destination, run(source, "rev-parse", "HEAD"), again);
+      yield* moveToSourceCode(git, destination, run(source, "rev-parse", "HEAD"), again);
       assert.equal(run(destination, "rev-parse", "HEAD"), run(source, "rev-parse", "HEAD"));
       assert.equal(
         NodeFS.readFileSync(NodePath.join(destination, "kept.txt"), "utf8"),

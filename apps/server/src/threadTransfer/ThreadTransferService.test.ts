@@ -434,7 +434,6 @@ it.layer(TestLayer)("ThreadTransferService", (it) => {
         projectId: preflight.projectId,
         instanceId,
         workspace: { type: "root" as const },
-        fastForwardToSource: false,
       };
       const { threadId } = yield* transfers.importThread(importInput);
       assert.isTrue(NodeFS.existsSync(rolloutPath));
@@ -540,7 +539,6 @@ it.layer(TestLayer)("ThreadTransferService", (it) => {
           projectId: preflight.projectId,
           instanceId,
           workspace: { type: "root" },
-          fastForwardToSource: false,
         });
         yield* transfers.complete({
           threadId: sourceThreadId,
@@ -633,7 +631,6 @@ it.layer(TestLayer)("ThreadTransferService", (it) => {
         projectId: null,
         instanceId,
         workspace: null,
-        fastForwardToSource: false,
       });
       assert.deepEqual(clones, [
         {

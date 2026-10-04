@@ -66,7 +66,7 @@ import {
   type BundleSourceFile,
 } from "./ThreadTransferBundle.ts";
 import {
-  applyCodeSnapshot,
+  moveToSourceCode,
   fetchCodeSnapshot,
   pushCodeSnapshot,
   stashTransferredCode,
@@ -613,7 +613,7 @@ const make = Effect.gen(function* () {
         newProject: remoteUrl === null ? null : { title: manifest.repo.projectTitle, remoteUrl },
         instanceId: provider?.instanceId ?? null,
         workspace: null,
-        canFastForward: false,
+        carriesSourceCode: false,
       };
     }
 
@@ -723,12 +723,11 @@ const make = Effect.gen(function* () {
     const checkoutClean =
       checkoutCwd === null || (yield* gitOutput(checkoutCwd, ["status", "--porcelain"])) === "";
     const carriesSourceCode =
-      snapshotHere &&
       blockers.length === 0 &&
       !checkoutDiffers &&
       (relation === "same" || relation === "behind") &&
       checkoutClean;
-    if (snapshotHere && !checkoutClean && !checkoutDiffers) {
+    if (!checkoutClean && !checkoutDiffers && (snapshotHere || relation === "behind")) {
       warnings.push({
         code: "checkout_differs",
         message:
@@ -737,6 +736,13 @@ const make = Effect.gen(function* () {
     }
 
     const plural = (n: number) => (n === 1 ? "commit" : "commits");
+    if (manifest.repo.dirtyFileCount > 0 && !(carriesSourceCode && snapshotHere)) {
+      const count = manifest.repo.dirtyFileCount;
+      warnings.push({
+        code: "source_dirty",
+        message: `The source has ${count} uncommitted ${count === 1 ? "file" : "files"}, which are not transferred.`,
+      });
+    }
     if (!carriesSourceCode) {
       if (relation === "behind") {
         warnings.push({
@@ -760,13 +766,6 @@ const make = Effect.gen(function* () {
             "The source's latest commit is not on this environment. Push it from the source to match.",
         });
       }
-      if (manifest.repo.dirtyFileCount > 0) {
-        const count = manifest.repo.dirtyFileCount;
-        warnings.push({
-          code: "source_dirty",
-          message: `The source has ${count} uncommitted ${count === 1 ? "file" : "files"}, which are not transferred.`,
-        });
-      }
     }
     return {
       blockers,
@@ -775,7 +774,6 @@ const make = Effect.gen(function* () {
       newProject: null,
       instanceId: provider?.instanceId ?? null,
       workspace,
-      canFastForward: !carriesSourceCode && relation === "behind",
       carriesSourceCode,
     };
   });
@@ -961,17 +959,15 @@ const make = Effect.gen(function* () {
     const workspace = yield* realizeWorkspace(project.workspaceRoot, workspacePlan);
     const snapshot = manifest.repo.snapshot ?? null;
     const sourceHead = manifest.repo.headSha;
-    const sourceCodeApplied =
-      checks.carriesSourceCode === true && snapshot != null && sourceHead !== null;
-    if (sourceCodeApplied) {
-      yield* applyCodeSnapshot(gitOutput, workspace.cwd, sourceHead, snapshot);
-    } else if (input.fastForwardToSource && manifest.repo.headSha !== null) {
-      const merged = yield* gitOutput(workspace.cwd, ["merge", "--ff-only", manifest.repo.headSha]);
-      if (merged === null) {
-        return yield* fail(
-          "Could not fast-forward to the source commit. Commit or stash local changes and try again.",
-        );
-      }
+    // Whether the source's uncommitted files arrived, so the source can park its copy.
+    let sourceCodeApplied = false;
+    if (checks.carriesSourceCode && sourceHead !== null) {
+      const arrived =
+        snapshot !== null && (yield* fetchCodeSnapshot(gitOutput, workspace.cwd, snapshot))
+          ? snapshot
+          : null;
+      yield* moveToSourceCode(gitOutput, workspace.cwd, sourceHead, arrived);
+      sourceCodeApplied = arrived?.uncommitted === true;
     }
 
     const nativeRoot = yield* adapter.nativeSessionTransfer

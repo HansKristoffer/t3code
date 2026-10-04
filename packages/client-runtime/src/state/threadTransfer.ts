@@ -244,7 +244,6 @@ export async function finishThreadTransfer(
   deps: ThreadTransferDeps,
   prepared: PreparedThreadTransfer,
   options: {
-    readonly fastForwardToSource: boolean;
     readonly destinationLabel?: string | undefined;
     readonly onStep: (step: ThreadTransferStep, fraction?: number) => void;
   },
@@ -287,7 +286,6 @@ export async function finishThreadTransfer(
       projectId: preflight.projectId,
       instanceId: preflight.instanceId,
       workspace: preflight.workspace,
-      fastForwardToSource: options.fastForwardToSource,
     }));
   } catch (error) {
     throw new ThreadTransferFailure(failureMessage(error), true);
@@ -316,12 +314,11 @@ export async function runThreadTransfer(
   },
 ): Promise<ThreadId> {
   const prepared = await prepareThreadTransfer(deps, input);
-  const { blockers, canFastForward } = prepared.preflight;
+  const { blockers } = prepared.preflight;
   if (blockers.length > 0) {
     throw new ThreadTransferFailure(blockers.map((blocker) => blocker.message).join(" "), false);
   }
   return finishThreadTransfer(deps, prepared, {
-    fastForwardToSource: canFastForward,
     destinationLabel: input.destinationLabel,
     onStep: () => undefined,
   });
