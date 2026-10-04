@@ -17,7 +17,8 @@ other. Keep both connected until the transfer finishes.
   destination has no project for it, it clones the source's `origin` remote into its projects folder
   and adds the project, using the destination's own Git credentials.
 - If the thread ran in its own worktree, the destination creates or reuses a worktree for its
-  branch. The branch does not need to be pushed.
+  branch. The branch does not need to be pushed. A new worktree or clone runs the project's setup
+  script, the one set to run on worktree creation, before the agent continues.
 - Sign in to the same provider on the destination. Claude and Codex threads can be transferred.
 
 The destination checks these before anything is copied.
@@ -29,6 +30,12 @@ uncommitted files to a temporary ref on `origin`, without pushing or changing it
 destination moves its checkout to the source's commit and restores those files as uncommitted
 changes. The temporary ref is deleted when the transfer finishes. Files your `.gitignore` excludes,
 such as `.env`, are not carried.
+
+When the thread ran in its own worktree, the source then moves its copy of those uncommitted files
+into a stash named `T3 Code: transferred to <environment>`. The worktree is left clean, so when you
+transfer the thread back, it takes the code returning from the destination. Run `git stash list` in
+that worktree to find the stash. Edits you make on the source after the transfer starts are not
+stashed.
 
 The destination keeps its own code instead, and warns you, when its checkout has uncommitted
 changes, is on another branch, or has commits the source does not. If the source cannot push, for
@@ -46,6 +53,13 @@ These stay on the source:
 
 - Diffs and rewinds for turns before the transfer
 - Running background tasks and machine-local MCP servers
+
+## Letting agents transfer threads
+
+Agents can move threads too, through the T3 Code tools available to them. Ask the agent, for
+example, to "continue this on the server". It stops there and continues on the destination, the same
+as when you transfer the thread yourself. A T3 Code app connected to both environments must be
+open, such as the desktop app on your computer. It carries the move and shows its progress.
 
 ## If a transfer does not finish
 

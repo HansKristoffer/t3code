@@ -21,6 +21,8 @@ import {
 import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
 import * as ScheduledTasks from "../../../scheduledTasks/ScheduledTaskService.ts";
 import { queuedRunsInDeliveryOrder } from "../../../orchestration-v2/QueuedRunOrder.ts";
+import * as ThreadTransferBroker from "../../../threadTransfer/ThreadTransferBroker.ts";
+import { importedThreadId } from "../../../threadTransfer/ThreadTransferService.ts";
 import { ThreadToolkit } from "./tools.ts";
 
 function queueEntry(
@@ -161,6 +163,58 @@ export const ThreadToolkitHandlersLive = ThreadToolkit.toLayer({
           }),
         ),
       };
+    }),
+  t3_thread_transfer_targets: () =>
+    Effect.gen(function* () {
+      yield* readCaller();
+      const broker = yield* ThreadTransferBroker.ThreadTransferBroker;
+      return { targets: yield* broker.targets };
+    }),
+  t3_thread_transfer_to_environment: (input) =>
+    Effect.gen(function* () {
+      const { caller, projection } = yield* readWritableThread(input.threadId);
+      const broker = yield* ThreadTransferBroker.ThreadTransferBroker;
+      const targets = yield* broker.targets;
+      const wanted = input.environment.toLowerCase();
+      const target =
+        targets.find((candidate) => candidate.environmentId === input.environment) ??
+        targets.find((candidate) => candidate.label.toLowerCase() === wanted);
+      if (target === undefined) {
+        return yield* new OrchestratorMcpFailure({
+          code: "invalid_request",
+          message:
+            targets.length === 0
+              ? "No open T3 Code app is connected to this environment and another one."
+              : `Unknown environment '${input.environment}'. Available: ${targets
+                  .map((candidate) => `${candidate.label} (${candidate.environmentId})`)
+                  .join(", ")}.`,
+        });
+      }
+      const threadId = projection.thread.id;
+      const started = yield* broker
+        .request({ threadId, targetEnvironmentId: target.environmentId })
+        .pipe(
+          Effect.mapError(
+            (error) =>
+              new OrchestratorMcpFailure({ code: "orchestration_error", message: error.message }),
+          ),
+        );
+      const common = { environmentId: target.environmentId, environmentLabel: target.label };
+      // Moving the caller stops its turn, so nothing would read a later result.
+      if (threadId === caller.id) {
+        return {
+          ...common,
+          status: "started" as const,
+          threadId: importedThreadId(started.transferId),
+        };
+      }
+      const arrived = yield* started.result.pipe(
+        Effect.mapError(
+          (error) =>
+            new OrchestratorMcpFailure({ code: "orchestration_error", message: error.message }),
+        ),
+      );
+      return { ...common, status: "transferred" as const, threadId: arrived };
     }),
   t3_thread_configuration: (input) =>
     Effect.gen(function* () {

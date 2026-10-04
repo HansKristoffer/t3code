@@ -52,6 +52,7 @@ import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as McpSessionRegistryTestkit from "../mcp/McpSessionRegistry.testkit.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as ProjectService from "../project/ProjectService.ts";
+import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as RepositoryProjects from "../project/RepositoryProjects.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import type { ProviderInstance } from "../provider/ProviderDriver.ts";
@@ -145,6 +146,7 @@ const projectsRoot = NodeFS.realpathSync(
   NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-transfer-projects-")),
 );
 const clones: Array<{ readonly remoteUrl: string; readonly destinationPath: string }> = [];
+const setupRuns: Array<string> = [];
 const gitResult = (exitCode: number, stdout: string) =>
   Effect.succeed({
     exitCode,
@@ -220,6 +222,15 @@ const TestLayer = ThreadTransferService.layer.pipe(
     Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: projectsRoot }),
   ),
   Layer.provide(
+    Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({
+      runForThread: ({ worktreePath }) =>
+        Effect.sync(() => {
+          setupRuns.push(worktreePath);
+          return { status: "no-script" } as const;
+        }),
+    }),
+  ),
+  Layer.provide(
     Layer.mock(SourceControlRepositoryService.SourceControlRepositoryService)({
       cloneRepository: ({ remoteUrl, destinationPath }) =>
         Effect.sync(() => {
@@ -247,9 +258,9 @@ const TestLayer = ThreadTransferService.layer.pipe(
 const at = DateTime.makeUnsafe("2026-10-01T10:00:00.000Z");
 const historyEvents = (threadId: ThreadId): ReadonlyArray<OrchestrationV2DomainEvent> =>
   (["user", "assistant"] as const).flatMap((role, index) => {
-    const messageId = MessageId.make(`source-message-${index}`);
+    const messageId = MessageId.make(`${threadId}:source-message-${index}`);
     const common = {
-      id: TurnItemId.make(`source-item-${index}`),
+      id: TurnItemId.make(`${threadId}:source-item-${index}`),
       threadId,
       runId: null,
       nodeId: null,
@@ -266,7 +277,7 @@ const historyEvents = (threadId: ThreadId): ReadonlyArray<OrchestrationV2DomainE
     };
     return [
       {
-        id: EventId.make(`source-message-event-${index}`),
+        id: EventId.make(`${threadId}:source-message-event-${index}`),
         type: "message.updated",
         threadId,
         occurredAt: at,
@@ -286,7 +297,7 @@ const historyEvents = (threadId: ThreadId): ReadonlyArray<OrchestrationV2DomainE
         },
       },
       {
-        id: EventId.make(`source-item-event-${index}`),
+        id: EventId.make(`${threadId}:source-item-event-${index}`),
         type: "turn-item.updated",
         threadId,
         occurredAt: at,
@@ -427,6 +438,8 @@ it.layer(TestLayer)("ThreadTransferService", (it) => {
       };
       const { threadId } = yield* transfers.importThread(importInput);
       assert.isTrue(NodeFS.existsSync(rolloutPath));
+      // The existing checkout is already set up.
+      assert.deepEqual(setupRuns, []);
       const imported = yield* orchestrator.getThreadProjection(threadId);
       assert.equal(imported.thread.historyOrigin, "transfer");
       assert.deepEqual(imported.thread.transferredFrom, {
@@ -462,6 +475,96 @@ it.layer(TestLayer)("ThreadTransferService", (it) => {
       assert.deepEqual(source?.transfer, { transferId: "t-1", status: "completed", destination });
       assert.isNotNull(source?.archivedAt);
       assert.isFalse(NodeFS.existsSync(NodePath.join(root, "out", "t-1.bundle")));
+    }),
+  );
+  it.effect("bounces a thread A to B to A to B without losing or duplicating history", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const transfers = yield* ThreadTransferService.ThreadTransferService;
+      const config = yield* ServerConfig.ServerConfig;
+      const root = NodePath.join(config.stateDir, "thread-transfers");
+      // One environment plays both sides, so every trip lands where the session
+      // already has an older copy and an archived earlier thread, as a trip back does.
+      const bounceNativeId = "019b8053-1111-7222-8333-444455556666";
+      const sessionPath = NodePath.join(
+        codexHome,
+        `sessions/2026/01/03/rollout-2026-01-03T10-00-00-${bounceNativeId}.jsonl`,
+      );
+      NodeFS.mkdirSync(NodePath.dirname(sessionPath), { recursive: true });
+      NodeFS.writeFileSync(sessionPath, "trip 0\n");
+      const firstThreadId = ThreadId.make("bounce-source");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("bounce-source-create"),
+        threadId: firstThreadId,
+        projectId,
+        title: "Bounce between machines",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        importedNativeThread: { ref: { driver, nativeId: bounceNativeId, strength: "strong" } },
+      });
+      yield* eventSink.write({ events: historyEvents(firstThreadId) });
+
+      const visited: Array<ThreadId> = [firstThreadId];
+      for (const trip of [1, 2, 3]) {
+        const sourceThreadId = visited.at(-1)!;
+        const transferId = `bounce-${trip}`;
+        NodeFS.writeFileSync(sessionPath, `trip ${trip}\n`);
+        const exported = yield* transfers.exportThread({ threadId: sourceThreadId, transferId });
+        NodeFS.mkdirSync(NodePath.join(root, "in"), { recursive: true });
+        NodeFS.copyFileSync(
+          NodePath.join(root, "out", `${transferId}.bundle`),
+          NodePath.join(root, "in", `${transferId}.bundle`),
+        );
+        // The destination still holds the session as it was on an earlier trip.
+        NodeFS.writeFileSync(sessionPath, "stale copy\n");
+        const preflight = yield* transfers.preflight({
+          manifest: exported.manifest,
+          bundleBytes: exported.bundleBytes,
+        });
+        assert.deepEqual(preflight.blockers, []);
+        const { threadId } = yield* transfers.importThread({
+          transferId,
+          projectId: preflight.projectId,
+          instanceId,
+          workspace: { type: "root" },
+          fastForwardToSource: false,
+        });
+        yield* transfers.complete({
+          threadId: sourceThreadId,
+          transferId,
+          destination: { environmentId: EnvironmentId.make("env-b"), threadId },
+        });
+        // The newer session replaces the stale copy.
+        assert.equal(NodeFS.readFileSync(sessionPath, "utf8"), `trip ${trip}\n`);
+        const source = yield* orchestrator.getThreadShell(sourceThreadId);
+        assert.equal(source?.transfer?.status, "completed");
+        assert.isNotNull(source?.archivedAt);
+        const arrived = yield* orchestrator.getThreadProjection(threadId);
+        assert.equal(arrived.thread.historyOrigin, "transfer");
+        assert.deepEqual(
+          arrived.visibleTurnItems.map(({ item }) => [item.type, item.runId]),
+          [
+            ["user_message", null],
+            ["assistant_message", null],
+          ],
+        );
+        // The session record now belongs to the newest copy, which can resume it.
+        const providerThread = arrived.providerThreads.find(
+          (candidate) => candidate.id === arrived.thread.activeProviderThreadId,
+        );
+        assert.equal(providerThread?.appThreadId, threadId);
+        assert.equal(providerThread?.nativeThreadRef?.nativeId, bounceNativeId);
+        assert.equal(providerThread?.status, "not_loaded");
+        visited.push(threadId);
+      }
+      assert.equal(new Set(visited).size, 4);
     }),
   );
   it.effect("clones the repository when the destination has no project for it", () =>
@@ -534,6 +637,8 @@ it.layer(TestLayer)("ThreadTransferService", (it) => {
       );
       assert.equal(imported.thread.projectId, clonedProject?.id);
       assert.isNull(imported.thread.worktreePath);
+      // A fresh clone has no dependencies yet, so the project's setup script runs there.
+      assert.deepEqual(setupRuns, [NodePath.join(projectsRoot, "repo")]);
     }),
   );
 });

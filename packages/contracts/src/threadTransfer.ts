@@ -178,13 +178,22 @@ export const ThreadTransferImportInput = Schema.Struct({
 });
 export type ThreadTransferImportInput = typeof ThreadTransferImportInput.Type;
 
-export const ThreadTransferImportResult = Schema.Struct({ threadId: ThreadId });
+export const ThreadTransferImportResult = Schema.Struct({
+  threadId: ThreadId,
+  /** The destination now has the source's uncommitted files. Unknown on a retried import. */
+  sourceCodeApplied: Schema.optional(Schema.Boolean),
+});
 export type ThreadTransferImportResult = typeof ThreadTransferImportResult.Type;
 
 export const ThreadTransferCompleteInput = Schema.Struct({
   threadId: ThreadId,
   transferId: ThreadTransferId,
   destination: OrchestrationV2ThreadTransferPeer,
+  /**
+   * The destination took the source's uncommitted files, so the source parks
+   * them in a stash and leaves its worktree clean for the thread's return.
+   */
+  sourceCodeApplied: Schema.optional(Schema.Boolean),
 });
 export type ThreadTransferCompleteInput = typeof ThreadTransferCompleteInput.Type;
 
@@ -193,6 +202,45 @@ export const ThreadTransferAbortInput = Schema.Struct({
   transferId: ThreadTransferId,
 });
 export type ThreadTransferAbortInput = typeof ThreadTransferAbortInput.Type;
+
+/**
+ * A client offering to carry transfers an agent asks for. It names the other
+ * environments it is connected to; the server sends it requests for those.
+ */
+export const ThreadTransferCarrier = Schema.Struct({
+  clientId: TrimmedNonEmptyString,
+  targets: Schema.Array(
+    Schema.Struct({ environmentId: EnvironmentId, label: TrimmedNonEmptyString }),
+  ),
+});
+export type ThreadTransferCarrier = typeof ThreadTransferCarrier.Type;
+
+/** A transfer an agent asked for. Carriers that can reach the target race to claim it. */
+export const ThreadTransferCarryRequest = Schema.Struct({
+  requestId: TrimmedNonEmptyString,
+  threadId: ThreadId,
+  transferId: ThreadTransferId,
+  targetEnvironmentId: EnvironmentId,
+});
+export type ThreadTransferCarryRequest = typeof ThreadTransferCarryRequest.Type;
+
+export const ThreadTransferClaimInput = Schema.Struct({
+  requestId: TrimmedNonEmptyString,
+  clientId: TrimmedNonEmptyString,
+});
+export type ThreadTransferClaimInput = typeof ThreadTransferClaimInput.Type;
+
+export const ThreadTransferClaimResult = Schema.Struct({ granted: Schema.Boolean });
+export type ThreadTransferClaimResult = typeof ThreadTransferClaimResult.Type;
+
+/** How a claimed transfer ended: the destination's thread, or why it failed. */
+export const ThreadTransferReportInput = Schema.Struct({
+  requestId: TrimmedNonEmptyString,
+  clientId: TrimmedNonEmptyString,
+  threadId: Schema.NullOr(ThreadId),
+  error: Schema.NullOr(Schema.String),
+});
+export type ThreadTransferReportInput = typeof ThreadTransferReportInput.Type;
 
 export class ThreadTransferError extends Schema.TaggedError<ThreadTransferError>()(
   "ThreadTransferError",

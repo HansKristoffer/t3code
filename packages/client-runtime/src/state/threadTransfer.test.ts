@@ -6,6 +6,7 @@ import { describe, expect, it } from "@effect/vitest";
 
 import type { AtomCommand } from "./runtime.ts";
 import {
+  carryThreadTransfer,
   finishThreadTransfer,
   prepareThreadTransfer,
   type ThreadTransferAtoms,
@@ -24,7 +25,11 @@ const ready: ThreadTransferPreflightResult = {
   canFastForward: false,
 };
 
-function harness(failing: ReadonlyArray<keyof ThreadTransferAtoms | "move">, preflight = ready) {
+function harness(
+  failing: ReadonlyArray<keyof ThreadTransferAtoms | "move">,
+  preflight = ready,
+  granted = true,
+) {
   const calls: Array<string> = [];
   // Each fake stands in for one typed RPC command; only the call order matters here.
   const command = (name: keyof ThreadTransferAtoms, value: unknown): never => {
@@ -53,6 +58,8 @@ function harness(failing: ReadonlyArray<keyof ThreadTransferAtoms | "move">, pre
       importThread: command("importThread", { threadId: "transfer-x" }),
       complete: command("complete", undefined),
       abort: command("abort", undefined),
+      claim: command("claim", { granted }),
+      report: command("report", undefined),
     },
     resolveUrl: (environmentId, url) => `${environmentId}${url}`,
     moveBundle: async () => {
@@ -110,5 +117,40 @@ describe("thread transfer flow", () => {
     });
     await prepareThreadTransfer(deps, { source, targetEnvironmentId: target, transferId: "x" });
     expect(calls).toEqual(["exportThread@a", "preflight@b", "abort@a"]);
+  });
+
+  it("carries an agent's request it claims and reports the result to the source", async () => {
+    const { deps, calls } = harness([]);
+    const request = {
+      requestId: "r",
+      threadId: source.threadId,
+      transferId: "x",
+      targetEnvironmentId: target,
+    };
+    const threadId = await carryThreadTransfer(deps, {
+      sourceEnvironmentId: source.environmentId,
+      clientId: "c",
+      request,
+    });
+    expect(threadId).toBe("transfer-x");
+    expect(calls[0]).toBe("claim@a");
+    expect(calls.at(-1)).toBe("report@a");
+  });
+
+  it("leaves a request another client claimed alone", async () => {
+    const { deps, calls } = harness([], ready, false);
+    const request = {
+      requestId: "r",
+      threadId: source.threadId,
+      transferId: "x",
+      targetEnvironmentId: target,
+    };
+    const threadId = await carryThreadTransfer(deps, {
+      sourceEnvironmentId: source.environmentId,
+      clientId: "c",
+      request,
+    });
+    expect(threadId).toBeNull();
+    expect(calls).toEqual(["claim@a"]);
   });
 });

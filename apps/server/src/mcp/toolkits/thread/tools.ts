@@ -17,6 +17,7 @@ import {
   ThreadId,
   RunId,
   NonNegativeInt,
+  EnvironmentId,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Schema from "effect/Schema";
@@ -25,11 +26,12 @@ import { Tool, Toolkit } from "effect/unstable/ai";
 import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
 import * as ScheduledTaskService from "../../../scheduledTasks/ScheduledTaskService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
+import * as ThreadTransferBroker from "../../../threadTransfer/ThreadTransferBroker.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 const ThreadOrganizeTool = Tool.make("t3_thread_organize", {
   description:
-    "Pin, snooze, settle, archive, or mark a thread unread in the calling project. Omit threadId for this thread. snooze requires snoozedUntil. Existing thread lifecycle rules apply; this does not schedule a future action. Moving a thread to another environment is not available here: it needs a client connected to both environments.",
+    "Pin, snooze, settle, archive, or mark a thread unread in the calling project. Omit threadId for this thread. snooze requires snoozedUntil. Existing thread lifecycle rules apply; this does not schedule a future action. To move a thread to another environment, use t3_thread_transfer_to_environment.",
   parameters: Schema.Struct({
     threadId: Schema.optional(ThreadId),
     action: Schema.Literals([
@@ -241,6 +243,35 @@ const ThreadSearchTool = Tool.make("t3_thread_search", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false);
 
+const transferTarget = Schema.Struct({ environmentId: EnvironmentId, label: Schema.String });
+const ThreadTransferTargetsTool = Tool.make("t3_thread_transfer_targets", {
+  ...commandTool,
+  description:
+    "List the environments a thread can move to with t3_thread_transfer_to_environment: other machines that an open T3 Code app is connected to alongside this one. Empty when no such app is open.",
+  success: Schema.Struct({ targets: Schema.Array(transferTarget) }),
+  dependencies: [...commandTool.dependencies, ThreadTransferBroker.ThreadTransferBroker],
+})
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false);
+const ThreadTransferToEnvironmentTool = Tool.make("t3_thread_transfer_to_environment", {
+  ...commandTool,
+  description:
+    "Move a thread in the calling project, with its agent session and code, to another environment, the same as the user's Transfer thread action. Omit threadId to move this thread. environment is an id or label from t3_thread_transfer_targets. A running thread stops here and continues on the destination; its unpushed commits and uncommitted files come along. The original is archived and read-only. Moving this thread ends your turn here: the call returns once the move starts, with the thread id it will have there. Moving another thread waits until it arrives. An open T3 Code app connected to both environments carries the move.",
+  parameters: Schema.Struct({
+    threadId: Schema.optional(ThreadId),
+    environment: TrimmedNonEmptyString,
+  }),
+  success: Schema.Struct({
+    status: Schema.Literals(["started", "transferred"]),
+    environmentId: EnvironmentId,
+    environmentLabel: Schema.String,
+    threadId: ThreadId,
+  }),
+  dependencies: [...commandTool.dependencies, ThreadTransferBroker.ThreadTransferBroker],
+})
+  .annotate(Tool.Destructive, true)
+  .annotate(Tool.OpenWorld, true);
+
 const ScheduledTaskRunTool = Tool.make("run_scheduled_task_now", {
   ...commandTool,
   description:
@@ -264,6 +295,8 @@ export const ThreadToolkit = Toolkit.make(
   ThreadForkTool,
   ThreadMergeBackTool,
   ThreadTransfersTool,
+  ThreadTransferTargetsTool,
+  ThreadTransferToEnvironmentTool,
   ThreadConfigurationTool,
   ThreadConfigureTool,
   PendingRequestListTool,

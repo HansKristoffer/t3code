@@ -20,7 +20,10 @@ both brokers the bundle, because environments never talk to each other and often
 each other. Every step is idempotent by transfer id, and the imported thread id derives from it,
 so any client can finish an interrupted transfer. Once the import may have run, the source stays
 locked until the user finishes or explicitly unlocks it: the destination may already hold a live
-copy, and unlocking automatically would split the native session in two.
+copy, and unlocking automatically would split the native session in two. An agent's transfer
+follows the same rule: the [broker](../../apps/server/src/threadTransfer/ThreadTransferBroker.ts)
+hands the request to an open client connected to both environments, which runs it like the
+dialog. Without such a client, agents cannot move threads.
 
 [Environment ID initialization](../../apps/server/src/environment/ServerEnvironment.ts)
 must publish a complete ID atomically. Repair of an empty ID file retains a

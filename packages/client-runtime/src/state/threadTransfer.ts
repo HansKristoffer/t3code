@@ -5,6 +5,7 @@ import {
   type ScopedThreadRef,
   type ThreadTransferExportResult,
   type ThreadTransferId,
+  type ThreadTransferCarryRequest,
   type ThreadTransferPreflightResult,
 } from "@t3tools/contracts";
 import type { Atom, AtomRegistry } from "effect/unstable/reactivity";
@@ -12,6 +13,7 @@ import type { Atom, AtomRegistry } from "effect/unstable/reactivity";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import {
   createEnvironmentRpcCommand,
+  createEnvironmentRpcSubscriptionAtomFamily,
   runAtomCommand,
   squashAtomCommandFailure,
   type AtomCommand,
@@ -49,7 +51,30 @@ export function createThreadTransferEnvironmentAtoms<R, E>(
       label: "environment-command:thread-transfer:abort",
       tag: WS_METHODS.threadTransferAbort,
     }),
+    claim: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:thread-transfer:claim",
+      tag: WS_METHODS.threadTransferClaim,
+    }),
+    report: createEnvironmentRpcCommand(runtime, {
+      label: "environment-command:thread-transfer:report",
+      tag: WS_METHODS.threadTransferReport,
+    }),
   };
+}
+
+/**
+ * Transfers agents ask an environment for, delivered to this client as a
+ * carrier. Requests are commands, not cached data, so the stream goes away
+ * with its owner and a remount never replays one.
+ */
+export function createThreadTransferCarrierAtom<R, E>(
+  runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
+) {
+  return createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+    label: "environment-data:thread-transfer:carry",
+    tag: WS_METHODS.threadTransferCarry,
+    idleTtlMs: 0,
+  });
 }
 
 type TransferCommand<I, A> = AtomCommand<
@@ -181,6 +206,7 @@ export async function completeThreadTransfer(
     readonly targetEnvironmentId: EnvironmentId;
     readonly transferId: ThreadTransferId;
     readonly destinationLabel?: string | undefined;
+    readonly sourceCodeApplied?: boolean | undefined;
   },
 ): Promise<ThreadId> {
   const threadId = importedTransferThreadId(input.transferId);
@@ -196,6 +222,9 @@ export async function completeThreadTransfer(
           threadId,
           ...(label ? { environmentLabel: label } : {}),
         },
+        ...(input.sourceCodeApplied === undefined
+          ? {}
+          : { sourceCodeApplied: input.sourceCodeApplied }),
       });
       return threadId;
     } catch (error) {
@@ -251,14 +280,15 @@ export async function finishThreadTransfer(
     throw new ThreadTransferFailure(failureMessage(error), false);
   }
   options.onStep("importing");
+  let sourceCodeApplied: boolean | undefined;
   try {
-    await call(deps, deps.atoms.importThread, targetEnvironmentId, {
+    ({ sourceCodeApplied } = await call(deps, deps.atoms.importThread, targetEnvironmentId, {
       transferId,
       projectId: preflight.projectId,
       instanceId: preflight.instanceId,
       workspace: preflight.workspace,
       fastForwardToSource: options.fastForwardToSource,
-    });
+    }));
   } catch (error) {
     throw new ThreadTransferFailure(failureMessage(error), true);
   }
@@ -268,5 +298,74 @@ export async function finishThreadTransfer(
     targetEnvironmentId,
     transferId,
     destinationLabel: options.destinationLabel,
+    sourceCodeApplied,
   });
+}
+
+/**
+ * Runs a whole transfer without asking anyone, as a carrier does for an
+ * agent: warnings are accepted and blockers fail it, with the source unlocked.
+ */
+export async function runThreadTransfer(
+  deps: ThreadTransferDeps,
+  input: {
+    readonly source: ScopedThreadRef;
+    readonly targetEnvironmentId: EnvironmentId;
+    readonly transferId: ThreadTransferId;
+    readonly destinationLabel?: string | undefined;
+  },
+): Promise<ThreadId> {
+  const prepared = await prepareThreadTransfer(deps, input);
+  const { blockers, canFastForward } = prepared.preflight;
+  if (blockers.length > 0) {
+    throw new ThreadTransferFailure(blockers.map((blocker) => blocker.message).join(" "), false);
+  }
+  return finishThreadTransfer(deps, prepared, {
+    fastForwardToSource: canFastForward,
+    destinationLabel: input.destinationLabel,
+    onStep: () => undefined,
+  });
+}
+
+/**
+ * Claims a transfer an agent asked `sourceEnvironmentId` for, runs it, and
+ * reports how it ended. Null when another client claimed it first.
+ */
+export async function carryThreadTransfer(
+  deps: ThreadTransferDeps,
+  input: {
+    readonly sourceEnvironmentId: EnvironmentId;
+    readonly clientId: string;
+    readonly request: ThreadTransferCarryRequest;
+    readonly destinationLabel?: string | undefined;
+    readonly onClaimed?: () => void;
+  },
+): Promise<ThreadId | null> {
+  const { request } = input;
+  const { granted } = await call(deps, deps.atoms.claim, input.sourceEnvironmentId, {
+    requestId: request.requestId,
+    clientId: input.clientId,
+  });
+  if (!granted) return null;
+  input.onClaimed?.();
+  const report = (threadId: ThreadId | null, error: string | null) =>
+    call(deps, deps.atoms.report, input.sourceEnvironmentId, {
+      requestId: request.requestId,
+      clientId: input.clientId,
+      threadId,
+      error,
+    }).catch(() => undefined);
+  try {
+    const threadId = await runThreadTransfer(deps, {
+      source: { environmentId: input.sourceEnvironmentId, threadId: request.threadId },
+      targetEnvironmentId: request.targetEnvironmentId,
+      transferId: request.transferId,
+      destinationLabel: input.destinationLabel,
+    });
+    await report(threadId, null);
+    return threadId;
+  } catch (error) {
+    await report(null, failureMessage(error));
+    throw error;
+  }
 }
