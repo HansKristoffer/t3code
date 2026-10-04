@@ -288,6 +288,7 @@ import { isEditableFocused } from "../lib/editableFocus";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import {
   AlarmClockIcon,
+  ArrowRightLeftIcon,
   CheckCircle2Icon,
   PaperclipIcon,
   ChevronDownIcon,
@@ -426,6 +427,8 @@ import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import type { AssistantCitationRequest } from "./chat/AssistantCitationSource";
 import { MessagesTimeline, type MessagesTimelineHistoryControls } from "./chat/MessagesTimeline";
 import { ProviderSubagentBar } from "./chat/ProviderSubagentBar";
+import { ThreadTransferBar } from "./chat/ThreadTransferBar";
+import { useTransferPeer } from "../state/threadTransfer";
 import { getTriggerDisplayModelName } from "./chat/providerIconUtils";
 import { resolveTimelineIsAtEnd, worktreeSetupAgentStarted } from "./chat/MessagesTimeline.logic";
 import {
@@ -552,6 +555,7 @@ import { fileAttachmentCapabilityBlockReason } from "./chat/composerAttachmentFi
 import { assetEnvironment } from "../state/assets";
 import { readPreparedConnection } from "../state/session";
 import { useAtomCommand } from "../state/use-atom-command";
+import { projectEnvironment } from "../state/projects";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { Button, InlineButton } from "./ui/button";
 import {
@@ -2660,6 +2664,24 @@ export default function ChatView(props: ChatViewProps) {
     [navigate, setEnvironmentEnabled],
   );
   const { scratchWorkspaceRootFor, openScratchProject } = useScratchProject();
+  const openRepositoryProject = useAtomCommand(projectEnvironment.openRepository, {
+    reportFailure: false,
+  });
+  // A machine picked for this draft that lacks the repository: sending clones it there first.
+  const [cloneTarget, setCloneTarget] = useState<{
+    readonly draftId: string;
+    readonly environmentId: EnvironmentId;
+  } | null>(null);
+  const pendingCloneEnvironmentId =
+    draftId && cloneTarget?.draftId === draftId ? cloneTarget.environmentId : null;
+  const [sendAfterClone, setSendAfterClone] = useState<{
+    readonly environmentId: EnvironmentId;
+    readonly dispatchMode: ComposerDispatchMode;
+    readonly submissionIntent: ComposerSubmissionIntent;
+    readonly directAnnotation:
+      | { annotation: PreviewAnnotationPayload; image: ComposerImageAttachment | null }
+      | undefined;
+  } | null>(null);
   const activeProjectIsScratch =
     activeProject !== null &&
     isScratchProject(
@@ -2669,11 +2691,16 @@ export default function ChatView(props: ChatViewProps) {
   const logicalProjectEnvironments = useMemo(() => {
     if (!activeProject) return [];
     const envs: EnvironmentOption[] = [];
-    const pushEnvironment = (environmentId: EnvironmentId, projectId: ProjectId | null) => {
+    const pushEnvironment = (
+      environmentId: EnvironmentId,
+      projectId: ProjectId | null,
+      cloneOnCreate = false,
+    ) => {
       const environment = environmentById.get(environmentId) ?? null;
       envs.push({
         environmentId,
         projectId,
+        ...(cloneOnCreate ? { cloneOnCreate } : {}),
         label: environment?.label ?? environmentId,
         isPrimary: environmentId === primaryEnvironmentId,
         machine: resolveEnvironmentMachineKind(environment?.serverConfig ?? null),
@@ -2708,6 +2735,18 @@ export default function ChatView(props: ChatViewProps) {
           continue;
         seen.add(p.environmentId);
         pushEnvironment(p.environmentId, p.id);
+      }
+      // A new thread can also start on a connected machine without the repository: it clones it.
+      if (draftId && activeProject.repositoryIdentity) {
+        for (const environment of environments) {
+          if (
+            !seen.has(environment.environmentId) &&
+            environment.connection.phase === "connected" &&
+            environment.serverConfig?.environment.capabilities.repositoryProjects === true
+          ) {
+            pushEnvironment(environment.environmentId, null, true);
+          }
+        }
       }
     }
     // Sort: primary first, then alphabetical
@@ -4158,7 +4197,9 @@ export default function ChatView(props: ChatViewProps) {
   // composer and its strips. Its approvals and questions are asked on the
   // top-level parent thread.
   const showProviderSubagentBar = isProviderSubagent;
-  const composerMounted = !showProviderSubagentBar;
+  // A transferred thread belongs to its copy on the other environment.
+  const threadTransfer = isProviderSubagent ? null : (serverThread?.source.transfer ?? null);
+  const composerMounted = !showProviderSubagentBar && threadTransfer === null;
   const providerSubagentModels = selectedProviderEntry?.models ?? EMPTY_PROVIDER_MODELS;
   // Providers can report a dated id or alias (claude-haiku-4-5-20251001).
   const providerSubagentModelSlug = selectedProviderEntry
@@ -4185,7 +4226,7 @@ export default function ChatView(props: ChatViewProps) {
   const mountComposerContextStrip = shouldShowComposerContextStrip({
     isDraftHeroState,
     persistInActiveThreads: settings.persistComposerContextStrip,
-    hasActiveProject: activeProject !== null && !showProviderSubagentBar,
+    hasActiveProject: activeProject !== null && composerMounted,
     isGitRepo,
     showEnvironmentIndicator: showComposerEnvironmentIndicator,
     hostsRestingComposerControls: routeKind === "server",
@@ -4193,13 +4234,13 @@ export default function ChatView(props: ChatViewProps) {
   const showComposerContextStrip = shouldShowComposerContextStrip({
     isDraftHeroState,
     persistInActiveThreads: settings.persistComposerContextStrip,
-    hasActiveProject: activeProject !== null && !showProviderSubagentBar,
+    hasActiveProject: activeProject !== null && composerMounted,
     isGitRepo,
     showEnvironmentIndicator: showComposerEnvironmentIndicator,
     hostsRestingComposerControls: routeKind === "server" && restingComposerControlsVisible,
   });
   const mountComposerModelStrip =
-    routeKind === "server" && !mountComposerContextStrip && !showProviderSubagentBar;
+    routeKind === "server" && !mountComposerContextStrip && composerMounted;
   const showComposerModelStrip = mountComposerModelStrip && restingComposerControlsVisible;
   const terminalShortcutLabelOptions = useMemo(
     () => ({
@@ -4247,6 +4288,7 @@ export default function ChatView(props: ChatViewProps) {
             .filter((candidate) => {
               const environment = environmentById.get(candidate.environmentId);
               return (
+                !candidate.cloneOnCreate &&
                 environment?.connection.phase === "connected" &&
                 (loadBalancingSettings.loadBalancingWeights[candidate.environmentId] ?? 50) > 0 &&
                 environment.serverConfig?.providers.some(
@@ -4308,8 +4350,11 @@ export default function ChatView(props: ChatViewProps) {
       });
       return;
     }
+    setCloneTarget(null);
     loadBalancing.refresh(
-      logicalProjectEnvironments.map((environment) => environment.environmentId),
+      logicalProjectEnvironments
+        .filter((environment) => !environment.cloneOnCreate)
+        .map((environment) => environment.environmentId),
     );
     setDraftThreadContext(draftId, {
       environmentSelection: "auto",
@@ -4354,6 +4399,11 @@ export default function ChatView(props: ChatViewProps) {
         (env) => env.environmentId === nextEnvironmentId,
       );
       if (!target) return;
+      // The clone waits for send, so browsing machines never clones anything.
+      setCloneTarget(
+        target.cloneOnCreate ? { draftId, environmentId: target.environmentId } : null,
+      );
+      if (target.cloneOnCreate) return;
       const request = { environmentId: target.environmentId };
       environmentChangeRef.current = request;
       setIsEnvironmentChanging(false);
@@ -7210,6 +7260,24 @@ export default function ChatView(props: ChatViewProps) {
       onDismiss: acknowledgeActiveThreadWoke,
     };
   }, [acknowledgeActiveThreadWoke, activeThread?.id, activeThreadWokeVisible]);
+  // Says where an imported thread came from until it runs here.
+  const transferredFrom = serverThread?.source.transferredFrom ?? null;
+  const transferSource = useTransferPeer(transferredFrom);
+  const transferredFromVisible = transferredFrom !== null && serverProjection?.runs.length === 0;
+  const transferredFromBannerItem = useMemo<ComposerBannerStackItem | null>(
+    () =>
+      !transferredFromVisible
+        ? null
+        : {
+            id: `transferred-from:${activeThread?.id ?? "unknown"}`,
+            variant: "info",
+            priority: "notice",
+            icon: <ArrowRightLeftIcon />,
+            title: `Transferred from ${transferSource.label}`,
+            description: "The agent continues its session here.",
+          },
+    [activeThread?.id, transferSource.label, transferredFromVisible],
+  );
   const parkedThreadBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
     if (!activeThreadSnoozed && !activeThreadSettled) {
       return null;
@@ -7401,7 +7469,10 @@ export default function ChatView(props: ChatViewProps) {
     const resumeCompactionItems =
       resumeCompactionBannerItem === null ? [] : [resumeCompactionBannerItem];
     const wokeThreadItems = wokeThreadBannerItem === null ? [] : [wokeThreadBannerItem];
-    const parkedThreadItems = parkedThreadBannerItem === null ? [] : [parkedThreadBannerItem];
+    const parkedThreadItems = [
+      ...(transferredFromBannerItem === null ? [] : [transferredFromBannerItem]),
+      ...(parkedThreadBannerItem === null ? [] : [parkedThreadBannerItem]),
+    ];
     // The user asked for this one, so it leads the notice tier instead of trailing it.
     const usageLimitsItems = usageLimitsBanner === null ? [] : [usageLimitsBanner];
     const projectCloneItems = projectCloneBannerItem === null ? [] : [projectCloneBannerItem];
@@ -7482,6 +7553,7 @@ export default function ChatView(props: ChatViewProps) {
     resumeCompactionBannerItem,
     showBranchMismatchBanner,
     systemComposerBannerItems,
+    transferredFromBannerItem,
     usageLimitsBanner,
     wokeThreadBannerItem,
   ]);
@@ -8401,6 +8473,49 @@ export default function ChatView(props: ChatViewProps) {
         description: loadBalancing.pending
           ? "Resource checks are still running. You can choose a machine in the composer."
           : "No eligible machine has available resources. Choose a machine in the composer to override.",
+      });
+      return;
+    }
+    if (pendingCloneEnvironmentId !== null && draftId && activeProject?.repositoryIdentity) {
+      const identity = activeProject.repositoryIdentity;
+      const request = { environmentId: pendingCloneEnvironmentId };
+      environmentChangeRef.current = request;
+      setIsEnvironmentChanging(true);
+      const cloned = await openRepositoryProject({
+        environmentId: pendingCloneEnvironmentId,
+        input: {
+          canonicalKey: identity.canonicalKey,
+          remoteUrl: identity.locator.remoteUrl,
+          title: activeProject.title,
+        },
+      });
+      if (environmentChangeRef.current === request) environmentChangeRef.current = null;
+      setIsEnvironmentChanging(false);
+      if (cloned._tag !== "Success") {
+        if (!isAtomCommandInterrupted(cloned)) {
+          const error = squashAtomCommandFailure(cloned);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not clone the repository",
+              description: error instanceof Error ? error.message : undefined,
+            }),
+          );
+        }
+        return;
+      }
+      setCloneTarget(null);
+      setDraftThreadContext(draftId, {
+        projectRef: scopeProjectRef(pendingCloneEnvironmentId, cloned.value.id),
+        environmentSelection: "manual",
+        loadBalancedEnvironmentId: null,
+      });
+      // The send runs again once the draft has moved to the cloned project.
+      setSendAfterClone({
+        environmentId: pendingCloneEnvironmentId,
+        dispatchMode,
+        submissionIntent,
+        directAnnotation,
       });
       return;
     }
@@ -9705,6 +9820,20 @@ export default function ChatView(props: ChatViewProps) {
     }
   };
 
+  // Replays a send that cloned the repository once the draft is on the cloned project.
+  useEffect(() => {
+    if (sendAfterClone === null || activeThread?.environmentId !== sendAfterClone.environmentId) {
+      return;
+    }
+    setSendAfterClone(null);
+    void onSend(
+      undefined,
+      sendAfterClone.dispatchMode,
+      sendAfterClone.submissionIntent,
+      sendAfterClone.directAnnotation,
+    );
+  }, [sendAfterClone, activeThread?.environmentId, onSend]);
+
   const onRespondToApproval = useCallback(
     async (requestId: RuntimeRequestId, decision: ProviderApprovalDecision) => {
       if (!activeThreadId) return;
@@ -10721,6 +10850,9 @@ export default function ChatView(props: ChatViewProps) {
     isGitRepo,
     envLocked,
     availableEnvironments: logicalProjectEnvironments,
+    ...(pendingCloneEnvironmentId === null
+      ? {}
+      : { selectedEnvironmentId: pendingCloneEnvironmentId }),
     autoEnvironmentLabel,
     onAutoEnvironment:
       draftId &&
@@ -11154,6 +11286,12 @@ export default function ChatView(props: ChatViewProps) {
                               }
                             />
                           ) : null}
+                          {threadTransfer !== null && routeThreadRef !== null ? (
+                            <ThreadTransferBar
+                              threadRef={routeThreadRef}
+                              transfer={threadTransfer}
+                            />
+                          ) : null}
                           {!composerMounted ? null : (
                             <ChatComposer
                               reportedModelSelection={reportedModelSelection}
@@ -11194,7 +11332,9 @@ export default function ChatView(props: ChatViewProps) {
                               isRevertingCheckpoint={isRevertingCheckpoint}
                               sendDisabledReason={
                                 isEnvironmentChanging
-                                  ? "Preparing machine"
+                                  ? pendingCloneEnvironmentId !== null
+                                    ? "Cloning repository"
+                                    : "Preparing machine"
                                   : isRevertingCheckpoint
                                     ? "Rewinding conversation"
                                     : feedbackUploading
@@ -11390,6 +11530,7 @@ export default function ChatView(props: ChatViewProps) {
                                     : undefined
                                 }
                                 availableEnvironments={logicalProjectEnvironments}
+                                selectedEnvironmentId={pendingCloneEnvironmentId ?? undefined}
                                 composerControlsHostRef={setRestingComposerControlsHost}
                                 contextStripVisible={showComposerContextStrip}
                               />

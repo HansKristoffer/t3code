@@ -23,6 +23,7 @@ export type ThreadActionMenuId =
   | "rename"
   | "regenerate-title"
   | "mark-unread"
+  | "transfer"
   | "copy"
   | "copy-path"
   | "copy-branch"
@@ -96,6 +97,8 @@ export interface ThreadActionMenuState {
     readonly snooze: boolean;
     readonly pinning: boolean;
     readonly titleRegeneration: boolean;
+    /** Both this environment and another connected one accept transferred threads. */
+    readonly transfer: boolean;
   };
   readonly snoozePresets: ReadonlyArray<SnoozePreset>;
 }
@@ -199,6 +202,15 @@ export function buildThreadActionMenuItems(
                 checked: !state.autoSettleEnabled,
               },
             ],
+          },
+        ]
+      : []),
+    ...(state.supports.transfer
+      ? [
+          {
+            id: "transfer" as const,
+            label: "Transfer to environment…",
+            icon: "arrow-right-left",
           },
         ]
       : []),

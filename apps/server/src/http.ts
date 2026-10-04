@@ -29,6 +29,11 @@ import { OtlpTracer, OtlpSerialization } from "effect/unstable/observability";
 
 import * as ServerConfig from "./config.ts";
 import { ASSET_ROUTE_PREFIX, resolveAsset } from "./assets/AssetAccess.ts";
+import {
+  storeThreadTransferUpload,
+  THREAD_TRANSFER_UPLOAD_ROUTE_PREFIX,
+  validateThreadTransferUploadToken,
+} from "./threadTransfer/ThreadTransferFiles.ts";
 import { githubMediaResponse } from "./assets/GitHubMediaFetch.ts";
 import { statMediaFile, streamMediaFile, type OpenMediaFile } from "./assets/MediaFile.ts";
 import {
@@ -466,6 +471,39 @@ export const attachmentUploadRouteLayer = HttpRouter.add(
     // Keep the request stream in the route scope until the response is sent.
     const bodyPull = yield* Stream.toPull(request.stream);
     const stored = yield* storeAttachmentUpload(claims, Stream.fromPull(Effect.succeed(bodyPull)));
+    return stored.ok
+      ? HttpServerResponse.empty({ status: 204 })
+      : HttpServerResponse.text(stored.detail, { status: stored.status });
+  }),
+);
+
+export const threadTransferUploadRouteLayer = HttpRouter.add(
+  "POST",
+  `${THREAD_TRANSFER_UPLOAD_ROUTE_PREFIX}/*`,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const url = HttpServerRequest.toURL(request);
+    if (Option.isNone(url)) {
+      return HttpServerResponse.text("Bad Request", { status: 400 });
+    }
+    const claims = yield* validateThreadTransferUploadToken(
+      url.value.pathname.slice(`${THREAD_TRANSFER_UPLOAD_ROUTE_PREFIX}/`.length),
+    );
+    if (!claims) {
+      return HttpServerResponse.text("Not Found", { status: 404 });
+    }
+    const contentLength = request.headers["content-length"];
+    if (contentLength !== undefined && Number(contentLength) !== claims.sizeBytes) {
+      return HttpServerResponse.text("Content-Length must match the upload size.", {
+        status: 400,
+      });
+    }
+    // Keep the request stream in the route scope until the response is sent.
+    const bodyPull = yield* Stream.toPull(request.stream);
+    const stored = yield* storeThreadTransferUpload(
+      claims,
+      Stream.fromPull(Effect.succeed(bodyPull)),
+    );
     return stored.ok
       ? HttpServerResponse.empty({ status: 204 })
       : HttpServerResponse.text(stored.detail, { status: stored.status });

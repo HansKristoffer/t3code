@@ -13,6 +13,15 @@ connections are local to a client profile; the server's identity and state are
 not. A repository identity can correlate clones across environments, but never
 routes work between them. A project and its threads belong to one environment.
 
+A [thread transfer](../../apps/server/src/threadTransfer/ThreadTransferService.ts) does not move
+that ownership. The source exports a bundle, the destination imports it as a new thread with the
+same native provider session, and the source is archived as read-only. A client connected to
+both brokers the bundle, because environments never talk to each other and often cannot reach
+each other. Every step is idempotent by transfer id, and the imported thread id derives from it,
+so any client can finish an interrupted transfer. Once the import may have run, the source stays
+locked until the user finishes or explicitly unlocks it: the destination may already hold a live
+copy, and unlocking automatically would split the native session in two.
+
 [Environment ID initialization](../../apps/server/src/environment/ServerEnvironment.ts)
 must publish a complete ID atomically. Repair of an empty ID file retains a
 recovery file so concurrent or delayed initializers choose the same winner.

@@ -2,6 +2,7 @@ import {
   EnvironmentId,
   ORCHESTRATION_PROTOCOL_VERSION,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
+  THREAD_TRANSFER_MAX_BUNDLE_BYTES,
   type ExecutionEnvironmentDescriptor,
 } from "@t3tools/contracts";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
@@ -249,6 +250,8 @@ export const make = Effect.gen(function* () {
       serverResolvedCommandContext: true,
       environmentIcon: true,
       projectCloneTracking: true,
+      threadTransfer: { maxBundleBytes: THREAD_TRANSFER_MAX_BUNDLE_BYTES },
+      repositoryProjects: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
       ...(serverInstallation === null ? {} : { serverInstallation }),
       // V2 restart recovery uses the environment-owned opt-in. The old

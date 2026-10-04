@@ -1,5 +1,7 @@
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { requestCustomSnooze } from "../components/CustomSnoozeDialog";
+import { requestThreadTransfer } from "../components/ThreadTransferDialog";
+import { readCanTransferThreadFrom } from "../state/threadTransfer";
 import {
   type AtomCommandResult,
   isAtomCommandInterrupted,
@@ -138,6 +140,8 @@ export function useThreadActionMenu(input: {
           snooze: readEnvironmentSupportsSnooze(threadRef.environmentId),
           pinning: readEnvironmentSupportsPinning(threadRef.environmentId),
           titleRegeneration: readEnvironmentSupportsTitleRegeneration(threadRef.environmentId),
+          transfer:
+            thread.source.transfer == null && readCanTransferThreadFrom(threadRef.environmentId),
         };
         const isRegeneratingTitle = thread.titleRegeneration != null;
         const snoozePresets = resolveSnoozePresets(now, timestampFormat);
@@ -247,6 +251,9 @@ export function useThreadActionMenu(input: {
             return;
           case "mark-unread":
             markThreadUnread(threadRef);
+            return;
+          case "transfer":
+            requestThreadTransfer(threadRef);
             return;
           case "copy-path": {
             const workspacePath = thread.worktreePath ?? projectCwd;

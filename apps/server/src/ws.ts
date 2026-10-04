@@ -245,6 +245,8 @@ import {
 } from "@t3tools/shared/usageLimits";
 import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
 import * as AgentSessionImporter from "./project/AgentSessionImporter.ts";
+import * as ThreadTransferService from "./threadTransfer/ThreadTransferService.ts";
+import * as RepositoryProjects from "./project/RepositoryProjects.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
@@ -1245,6 +1247,8 @@ const makeWsRpcLayer = (
         yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
       const agentSessionScanner = yield* AgentSessionScanner.AgentSessionScanner;
       const agentSessionImporter = yield* AgentSessionImporter.AgentSessionImporter;
+      const threadTransfer = yield* ThreadTransferService.ThreadTransferService;
+      const repositoryProjects = yield* RepositoryProjects.RepositoryProjects;
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
       const keybindings = yield* Keybindings.Keybindings;
       const environmentTheme = yield* EnvironmentTheme.EnvironmentThemeService;
@@ -3163,6 +3167,36 @@ const makeWsRpcLayer = (
             agentSessionImporter.importRecentAgentThreads(input),
             { "rpc.aggregate": "workspace" },
           ),
+        [WS_METHODS.projectsEnsureRepository]: (input) =>
+          observeRpcEffect(WS_METHODS.projectsEnsureRepository, repositoryProjects.ensure(input), {
+            "rpc.aggregate": "orchestration",
+          }),
+        [WS_METHODS.threadTransferExport]: (input) =>
+          observeRpcEffect(WS_METHODS.threadTransferExport, threadTransfer.exportThread(input), {
+            "rpc.aggregate": "orchestration",
+          }),
+        [WS_METHODS.threadTransferPreflight]: (input) =>
+          observeRpcEffect(WS_METHODS.threadTransferPreflight, threadTransfer.preflight(input), {
+            "rpc.aggregate": "orchestration",
+          }),
+        [WS_METHODS.threadTransferCreateUploadUrl]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.threadTransferCreateUploadUrl,
+            threadTransfer.createUploadUrl(input),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [WS_METHODS.threadTransferImport]: (input) =>
+          observeRpcEffect(WS_METHODS.threadTransferImport, threadTransfer.importThread(input), {
+            "rpc.aggregate": "orchestration",
+          }),
+        [WS_METHODS.threadTransferComplete]: (input) =>
+          observeRpcEffect(WS_METHODS.threadTransferComplete, threadTransfer.complete(input), {
+            "rpc.aggregate": "orchestration",
+          }),
+        [WS_METHODS.threadTransferAbort]: (input) =>
+          observeRpcEffect(WS_METHODS.threadTransferAbort, threadTransfer.abort(input), {
+            "rpc.aggregate": "orchestration",
+          }),
         [WS_METHODS.assetsCreateUrl]: (input) =>
           observeRpcEffect(
             WS_METHODS.assetsCreateUrl,

@@ -15,6 +15,7 @@ import {
   ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
   type ChatAttachment,
   CommandId,
+  hasRunlessHistory,
   isProviderNativeSubagentThread,
   MessageId,
   type ModelSelection,
@@ -419,6 +420,9 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "checkpoint.rollback.fail":
     case "thread.background-work.settle":
     case "provider.switch":
+    case "thread.transfer-out.begin":
+    case "thread.transfer-out.complete":
+    case "thread.transfer-out.abort":
       return command.threadId;
     case "delegated_task.request":
     case "delegated_task.wake-policy":
@@ -1386,10 +1390,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 run.ordinal <= latestHandoffRun.ordinal,
             );
       const needsFullContext = deliveryProviderThread.nativeThreadRef === null;
-      const legacyImportItems =
-        projection.thread.historyOrigin === "v1_import"
-          ? yield* readHandoffItems(threadId, [null])
-          : [];
+      const legacyImportItems = hasRunlessHistory(projection.thread.historyOrigin)
+        ? yield* readHandoffItems(threadId, [null])
+        : [];
       const handoffStrategy = needsFullContext
         ? ("full_thread_summary" as const)
         : ("delta_since_target_last_seen" as const);
@@ -2305,6 +2308,170 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         events,
         effects,
       );
+    },
+  );
+
+  /**
+   * The source side of a thread transfer. Each step is idempotent for its
+   * transfer id, so a client retrying after a reload changes nothing twice.
+   */
+  const dispatchThreadTransferOut = Effect.fn("orchestrationV2.dispatch.threadTransferOut")(
+    function* (
+      command: Extract<
+        OrchestrationV2ServerCommand,
+        {
+          readonly type:
+            | "thread.transfer-out.begin"
+            | "thread.transfer-out.complete"
+            | "thread.transfer-out.abort";
+        }
+      >,
+      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+      effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+    ) {
+      const reject = (cause: string) =>
+        new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause,
+        });
+      const thread = yield* projectionStore
+        .getThread(command.threadId)
+        .pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+          ),
+        );
+      if (thread.deletedAt !== null) {
+        return yield* reject(`Thread ${command.threadId} is deleted.`);
+      }
+      const current = thread.transfer ?? null;
+      const sameTransfer = current?.transferId === command.transferId;
+      const now = yield* DateTime.now;
+      // A repeated step re-emits the unchanged thread: every command records an event.
+      let next: OrchestrationV2AppThread = thread;
+      switch (command.type) {
+        case "thread.transfer-out.begin": {
+          if (sameTransfer) break;
+          if (current?.status === "exporting") {
+            return yield* reject(`Thread ${command.threadId} is already being transferred.`);
+          }
+          if (current?.status === "completed") {
+            return yield* reject(`Thread ${command.threadId} was already transferred.`);
+          }
+          if (isProviderNativeSubagentThread(thread)) {
+            return yield* new OrchestratorSubagentThreadReadOnlyError({
+              commandId: command.commandId,
+              threadId: command.threadId,
+            });
+          }
+          const projection = yield* projectionStore
+            .getThreadRecords(command.threadId, ["runs", "runtimeRequests"], {
+              turnItemTypes: [],
+            })
+            .pipe(mapDispatchError(command));
+          if (
+            projection.runs.some((run) =>
+              ["preparing", "queued", "starting", "running", "waiting"].includes(run.status),
+            )
+          ) {
+            return yield* reject(
+              `Thread ${command.threadId} has active or queued work. Stop it before transferring.`,
+            );
+          }
+          if (projection.runtimeRequests.some((request) => request.status === "pending")) {
+            return yield* reject(
+              `Thread ${command.threadId} is waiting on an approval or question. Answer it before transferring.`,
+            );
+          }
+          next = {
+            ...thread,
+            transfer: { transferId: command.transferId, status: "exporting" },
+            updatedAt: now,
+          };
+          break;
+        }
+        case "thread.transfer-out.complete":
+          if (!sameTransfer) {
+            return yield* reject(
+              `Thread ${command.threadId} has no matching transfer to complete.`,
+            );
+          }
+          if (current.status === "completed") break;
+          next = {
+            ...thread,
+            transfer: {
+              transferId: command.transferId,
+              status: "completed",
+              destination: command.destination,
+            },
+            archivedAt: thread.archivedAt ?? now,
+            titleRegeneration: null,
+            updatedAt: now,
+          };
+          break;
+        case "thread.transfer-out.abort":
+          if (!sameTransfer) break;
+          if (current.status === "completed") {
+            return yield* reject(`Thread ${command.threadId} transfer already completed.`);
+          }
+          next = { ...thread, transfer: null, updatedAt: now };
+          break;
+      }
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "thread.transfer-updated",
+        threadId: command.threadId,
+        providerInstanceId: next.providerInstanceId,
+        occurredAt: now,
+        payload: next,
+      });
+
+      if (next === thread) return;
+      // The export reads the native session files, so the provider must stop
+      // writing them first. A later message reattaches only after an abort.
+      if (command.type === "thread.transfer-out.begin") {
+        const providerContext = yield* projectionStore
+          .getThreadProviderContext(command.threadId)
+          .pipe(mapDispatchError(command));
+        for (const session of providerContext.providerSessions) {
+          if (session.status === "stopped" || session.status === "error") continue;
+          const detail = "Thread is being transferred.";
+          yield* emit(
+            events,
+            command,
+          )({
+            type: "provider-session.detached",
+            threadId: command.threadId,
+            driver: session.driver,
+            providerInstanceId: session.providerInstanceId,
+            occurredAt: now,
+            payload: { providerSessionId: session.id, detachedAt: now, reason: detail },
+          });
+          yield* Ref.update(effects, (existing) => [
+            ...existing,
+            {
+              id: `effect:${command.commandId}:provider-session.detach:${session.id}`,
+              commandId: command.commandId,
+              threadId: command.threadId,
+              request: { type: "provider-session.detach", providerSessionId: session.id, detail },
+            } satisfies PendingOrchestrationEffectV2,
+          ]);
+        }
+      }
+      if (command.type === "thread.transfer-out.complete") {
+        yield* Ref.update(effects, (existing) => [
+          ...existing,
+          {
+            id: `effect:${command.commandId}:terminal.cleanup`,
+            commandId: command.commandId,
+            threadId: command.threadId,
+            request: { type: "terminal.cleanup" },
+          } satisfies PendingOrchestrationEffectV2,
+        ]);
+      }
     },
   );
 
@@ -5014,10 +5181,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const runId = idAllocator.derive.run({ threadId: command.threadId, ordinal });
       const latestCompletedRun = projection.runs.findLast((run) => run.status === "completed");
       const latestHandoffRun = projection.runs.findLast(isHandoffSourceRun);
-      const legacyImportItems =
-        projection.thread.historyOrigin === "v1_import"
-          ? yield* readHandoffItems(command.threadId, [null])
-          : [];
+      const legacyImportItems = hasRunlessHistory(projection.thread.historyOrigin)
+        ? yield* readHandoffItems(command.threadId, [null])
+        : [];
       const isProviderSwitch =
         activeProviderThread !== undefined &&
         activeProviderThread.providerInstanceId !== modelSelection.instanceId;
@@ -5554,7 +5720,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               ...sourceProjection.runs
                 .filter((run) => run.ordinal <= sourceRun.ordinal)
                 .map((run) => run.id),
-              ...(sourceProjection.thread.historyOrigin === "v1_import" ? [null] : []),
+              ...(hasRunlessHistory(sourceProjection.thread.historyOrigin) ? [null] : []),
             ]);
       const portableForkHandoff =
         !requiresPortableFork ||
@@ -9524,6 +9690,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.pull-request-watch.sync":
         yield* dispatchPullRequestWatchSync(command, events, effects);
         break;
+      case "thread.transfer-out.begin":
+      case "thread.transfer-out.complete":
+      case "thread.transfer-out.abort":
+        yield* dispatchThreadTransferOut(command, events, effects);
+        break;
       case "provider-session.detach":
         yield* dispatchProviderSessionDetach(command, events, effects);
         break;
@@ -9542,6 +9713,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           return yield* new OrchestratorSubagentThreadReadOnlyError({
             commandId: command.commandId,
             threadId: command.threadId,
+          });
+        }
+        // A thread being transferred, or already transferred, belongs to its copy.
+        if (thread.transfer != null) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause:
+              thread.transfer.status === "completed"
+                ? `Thread ${command.threadId} was transferred to another environment and is read-only.`
+                : `Thread ${command.threadId} is being transferred to another environment.`,
           });
         }
         yield* dispatchMessage(command, events, effects);

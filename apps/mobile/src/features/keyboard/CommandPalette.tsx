@@ -1,4 +1,5 @@
 import { useNavigation } from "@react-navigation/native";
+import { canTransferThreadFrom, transferThreadFromMobile } from "../threads/thread-transfer";
 import type { EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state/thread-search";
 import { THREAD_JUMP_KEYBINDING_COMMANDS } from "@t3tools/contracts";
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
@@ -299,6 +300,27 @@ export function CommandPalette(props: {
           run: () => runCommand(command),
         })),
       );
+      if (
+        activeThread?.source.transfer == null &&
+        canTransferThreadFrom(activeThreadRef.environmentId)
+      ) {
+        const source = activeThreadRef;
+        actions.push({
+          key: "transferThread",
+          kind: "action",
+          title: "Transfer thread to environment…",
+          searchTerms: ["move", "environment", "machine", "remote", "handoff"],
+          run: () =>
+            void transferThreadFromMobile({
+              source,
+              openThread: (ref) =>
+                navigation.navigate("Thread", {
+                  environmentId: String(ref.environmentId),
+                  threadId: String(ref.threadId),
+                }),
+            }),
+        });
+      }
     }
     const projectItems: CommandPaletteItem[] = projects.map((project) => ({
       key: `project:${scopedProjectKey(project.environmentId, project.id)}`,

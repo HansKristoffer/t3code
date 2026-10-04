@@ -11,6 +11,7 @@ import {
   CommandId,
   ContextHandoffId,
   ContextTransferId,
+  EnvironmentId,
   EventId,
   IsoDateTime,
   MessageId,
@@ -80,8 +81,57 @@ export const OrchestrationV2CreationSource = Schema.Literals([
 ]);
 export type OrchestrationV2CreationSource = typeof OrchestrationV2CreationSource.Type;
 
-export const OrchestrationV2ThreadHistoryOrigin = Schema.Literals(["native", "v1_import"]);
+/**
+ * `v1_import` and `transfer` threads start with history items that have no run
+ * (`runId: null`); those items count as history before the first run.
+ */
+export const OrchestrationV2ThreadHistoryOrigin = Schema.Literals([
+  "native",
+  "v1_import",
+  "transfer",
+]);
 export type OrchestrationV2ThreadHistoryOrigin = typeof OrchestrationV2ThreadHistoryOrigin.Type;
+
+/** Whether a thread's runless turn items are part of its history. */
+export function hasRunlessHistory(
+  historyOrigin: OrchestrationV2ThreadHistoryOrigin | undefined,
+): boolean {
+  return historyOrigin === "v1_import" || historyOrigin === "transfer";
+}
+
+/** A thread transfer id: minted by the client that brokers one transfer. */
+export const ThreadTransferId = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(64),
+  Schema.isPattern(/^[a-z0-9-]+$/i),
+);
+export type ThreadTransferId = typeof ThreadTransferId.Type;
+
+/**
+ * The source side of a transfer to another environment. While `exporting` the
+ * thread takes no new messages; once `completed` it is read-only and points at
+ * its copy in `destination`.
+ */
+export const OrchestrationV2ThreadTransferPeer = Schema.Struct({
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+  /** The environment's name when the transfer ran, for clients that don't know it. */
+  environmentLabel: Schema.optional(TrimmedNonEmptyString),
+});
+export type OrchestrationV2ThreadTransferPeer = typeof OrchestrationV2ThreadTransferPeer.Type;
+
+export const OrchestrationV2ThreadTransferOut = Schema.Struct({
+  transferId: ThreadTransferId,
+  status: Schema.Literals(["exporting", "completed"]),
+  destination: Schema.optional(OrchestrationV2ThreadTransferPeer),
+});
+export type OrchestrationV2ThreadTransferOut = typeof OrchestrationV2ThreadTransferOut.Type;
+
+/** Where a transferred-in thread came from. */
+export const OrchestrationV2ThreadTransferIn = Schema.Struct({
+  transferId: ThreadTransferId,
+  ...OrchestrationV2ThreadTransferPeer.fields,
+});
+export type OrchestrationV2ThreadTransferIn = typeof OrchestrationV2ThreadTransferIn.Type;
 
 const OrchestrationV2CreationFields = {
   createdBy: OrchestrationV2Actor,
@@ -428,6 +478,10 @@ export const OrchestrationV2AppThread = Schema.Struct({
       }),
     ),
   ),
+  /** Set on the source of a transfer to another environment. */
+  transfer: Schema.optional(Schema.NullOr(OrchestrationV2ThreadTransferOut)),
+  /** Set on a thread imported from another environment. */
+  transferredFrom: Schema.optional(Schema.NullOr(OrchestrationV2ThreadTransferIn)),
   deletedAt: Schema.NullOr(Schema.DateTimeUtc),
 });
 export type OrchestrationV2AppThread = typeof OrchestrationV2AppThread.Type;
@@ -1555,6 +1609,7 @@ export const OrchestrationV2DomainEvent = Schema.Union([
       "thread.interaction-mode-updated",
       "thread.model-selection-updated",
       "thread.provider-switched",
+      "thread.transfer-updated",
     ]),
     payload: OrchestrationV2AppThread,
   }),
@@ -1731,6 +1786,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   forkedFrom: Schema.NullOr(OrchestrationV2AppThread.fields.forkedFrom),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
   historyOrigin: Schema.optional(OrchestrationV2ThreadHistoryOrigin),
+  transfer: Schema.optional(Schema.NullOr(OrchestrationV2ThreadTransferOut)),
+  transferredFrom: Schema.optional(Schema.NullOr(OrchestrationV2ThreadTransferIn)),
   latestRunId: Schema.NullOr(RunId),
   latestRunRequestedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   latestRunStartedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
@@ -2356,6 +2413,7 @@ export const OrchestrationV2DomainEventJson = Schema.Union([
       "thread.interaction-mode-updated",
       "thread.model-selection-updated",
       "thread.provider-switched",
+      "thread.transfer-updated",
     ]),
     payload: OrchestrationV2AppThreadJson,
   }),
@@ -2949,6 +3007,30 @@ const OrchestrationV2InternalCommand = Schema.Union([
     threadId: ThreadId,
     requestId: CommandId,
     message: TrimmedNonEmptyString,
+  }),
+  /**
+   * Thread transfer to another environment, dispatched by the transfer service.
+   * `begin` locks the thread against new messages and detaches its provider
+   * sessions; `complete` marks it transferred and archives it; `abort` unlocks.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.transfer-out.begin"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    transferId: ThreadTransferId,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.transfer-out.complete"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    transferId: ThreadTransferId,
+    destination: OrchestrationV2ThreadTransferPeer,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.transfer-out.abort"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    transferId: ThreadTransferId,
   }),
   /**
    * Follows a Stop once its provider returned: background work the settled

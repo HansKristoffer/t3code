@@ -36,6 +36,7 @@ import {
 import * as Context from "effect/Context";
 import * as Schema from "effect/Schema";
 import type * as Effect from "effect/Effect";
+import type * as PlatformError from "effect/PlatformError";
 import type * as Scope from "effect/Scope";
 import type * as Stream from "effect/Stream";
 
@@ -578,9 +579,39 @@ export interface ProviderAdapterV2SessionRuntime {
   ) => Effect.Effect<OrchestrationV2ProviderThread, ProviderAdapterV2Error>;
 }
 
+/** A native session's files, relative to the root this instance keeps them under. */
+export interface ProviderNativeSessionFiles {
+  readonly root: string;
+  readonly relativePaths: ReadonlyArray<string>;
+}
+
+/**
+ * Moves a provider's native session between environments (thread transfer).
+ * Files found by `locate` are written below `importRoot` on the destination,
+ * so a later resume from `cwd` finds them. Paths resolve through the
+ * instance's own home, never a default like `~/.claude`.
+ */
+export interface ProviderAdapterV2NativeSessionTransfer {
+  /** Null when this instance holds no files for the native thread. */
+  readonly locate: (input: {
+    readonly nativeThreadId: string;
+    readonly cwd: string;
+  }) => Effect.Effect<ProviderNativeSessionFiles | null, PlatformError.PlatformError>;
+  readonly importRoot: (input: {
+    readonly cwd: string;
+  }) => Effect.Effect<string, PlatformError.PlatformError>;
+  /** Whether a bundled path is one of `nativeThreadId`'s own files; imports refuse anything else. */
+  readonly accepts: (input: {
+    readonly nativeThreadId: string;
+    readonly relativePath: string;
+  }) => boolean;
+}
+
 export interface ProviderAdapterV2Shape {
   readonly instanceId: ProviderInstanceId;
   readonly driver: ProviderDriverKind;
+  /** Absent when this driver cannot move a native session to another environment. */
+  readonly nativeSessionTransfer?: ProviderAdapterV2NativeSessionTransfer;
   readonly getCapabilities: () => Effect.Effect<
     OrchestrationV2ProviderCapabilities,
     ProviderAdapterV2Error

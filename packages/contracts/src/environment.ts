@@ -130,6 +130,17 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   threadRestartContinuation: Schema.optionalKey(Schema.Boolean),
   /** Server resolves `projectSettingsOverrides`; older servers ignore the key. */
   projectSettingsOverrides: Schema.optionalKey(Schema.Boolean),
+  /** Server understands projects.ensureRepository: a new thread can target a machine
+      that does not have the repository yet, which clones it on create. */
+  repositoryProjects: Schema.optionalKey(Schema.Boolean),
+  /** Server exports and imports threads with their native provider session.
+      A transfer needs both environments to advertise it; `maxBundleBytes`
+      bounds the bundle this server accepts. */
+  threadTransfer: Schema.optionalKey(
+    Schema.Struct({
+      maxBundleBytes: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+    }),
+  ),
   /** Server understands thread.snooze / thread.unsnooze commands. Same
       version-skew contract as threadSettlement. */
   threadSnooze: Schema.optionalKey(Schema.Boolean),

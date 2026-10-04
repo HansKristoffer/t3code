@@ -1,3 +1,4 @@
+import { useNavigation } from "@react-navigation/native";
 import type { ThreadRowProviderInstance } from "./thread-provider-instance";
 import {
   THREAD_LIST_V2_MONO_FONT as MONO_FONT,
@@ -39,6 +40,7 @@ import { useThreadPr } from "../../state/use-thread-pr";
 import { useSwipeRowDormant } from "../home/swipe-row-activation";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
 import { buildThreadTitleRegenerationMenuItems } from "./thread-title-regeneration-menu";
+import { transferThreadFromMobile } from "./thread-transfer";
 import {
   THREAD_LIST_V2_SETTLED_PAGE_COUNT,
   resolveThreadListV2SnoozeGateExpiryMs,
@@ -521,6 +523,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly autoSettleOptOutSupported: boolean;
   /** False on servers that predate thread title regeneration. */
   readonly titleRegenerationSupported: boolean;
+  /** This and another connected environment accept transferred threads. */
+  readonly transferSupported?: boolean;
   /** Server supports reordering this card's section. */
   readonly reorderSupported?: boolean;
   readonly onMoveThread?: (
@@ -540,6 +544,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly simultaneousSwipeGesture?: ComponentProps<typeof ThreadSwipeable>["simultaneousWith"];
 }) {
   const { width: windowWidth } = useWindowDimensions();
+  const navigation = useNavigation();
   const {
     thread,
     variant,
@@ -742,6 +747,21 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     ],
     [props.titleRegenerationSupported, thread.titleRegeneration],
   );
+  const titleAndTransferMenuItems = useMemo<MenuAction[]>(
+    () => [
+      ...titleMenuItems,
+      ...(props.transferSupported === true && thread.source.transfer == null
+        ? [
+            {
+              id: "transfer",
+              title: "Transfer to environment…",
+              image: "arrow.left.arrow.right",
+            } satisfies MenuAction,
+          ]
+        : []),
+    ],
+    [props.transferSupported, thread.source.transfer, titleMenuItems],
+  );
   const snoozableCardMenuActions = useMemo<MenuAction[]>(
     () => [
       { id: "settle", title: "Settle", image: "checkmark" },
@@ -752,21 +772,21 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         subactions: snoozePresetActions,
       },
       ...arrangementMenuItems,
-      ...titleMenuItems,
+      ...titleAndTransferMenuItems,
       ...autoSettleMenuItems,
       { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
     ],
-    [arrangementMenuItems, autoSettleMenuItems, snoozePresetActions, titleMenuItems],
+    [arrangementMenuItems, autoSettleMenuItems, snoozePresetActions, titleAndTransferMenuItems],
   );
   const cardMenuActions = useMemo<MenuAction[]>(
     () => [
       CARD_MENU_ACTIONS[0]!,
       ...arrangementMenuItems,
-      ...titleMenuItems,
+      ...titleAndTransferMenuItems,
       ...autoSettleMenuItems,
       ...CARD_MENU_ACTIONS.slice(1),
     ],
-    [arrangementMenuItems, autoSettleMenuItems, titleMenuItems],
+    [arrangementMenuItems, autoSettleMenuItems, titleAndTransferMenuItems],
   );
   // Settled and snoozed rows keep the setting too, matching web where every
   // row shares one menu builder.
@@ -776,29 +796,29 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       ...arrangementMenuItems.filter(
         (action) => action.id !== "move-up" && action.id !== "move-down",
       ),
-      ...titleMenuItems,
+      ...titleAndTransferMenuItems,
       ...autoSettleMenuItems,
       SLIM_MENU_ACTIONS[1]!,
     ],
-    [arrangementMenuItems, autoSettleMenuItems, titleMenuItems],
+    [arrangementMenuItems, autoSettleMenuItems, titleAndTransferMenuItems],
   );
   const snoozedMenuActions = useMemo<MenuAction[]>(
     () => [
       SNOOZED_MENU_ACTIONS[0]!,
-      ...titleMenuItems,
+      ...titleAndTransferMenuItems,
       ...autoSettleMenuItems,
       SNOOZED_MENU_ACTIONS[1]!,
     ],
-    [autoSettleMenuItems, titleMenuItems],
+    [autoSettleMenuItems, titleAndTransferMenuItems],
   );
   const legacyMenuActions = useMemo<MenuAction[]>(
     () => [
       LEGACY_MENU_ACTIONS[0]!,
       ...arrangementMenuItems,
-      ...titleMenuItems,
+      ...titleAndTransferMenuItems,
       LEGACY_MENU_ACTIONS[1]!,
     ],
-    [arrangementMenuItems, titleMenuItems],
+    [arrangementMenuItems, titleAndTransferMenuItems],
   );
   const handleMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
@@ -816,6 +836,16 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       if (nativeEvent.event === "archive") handleArchive();
       if (nativeEvent.event === "rename") handleRename();
       if (nativeEvent.event === "regenerate-title") handleRegenerateTitle();
+      if (nativeEvent.event === "transfer") {
+        void transferThreadFromMobile({
+          source: { environmentId: thread.environmentId, threadId: thread.id },
+          openThread: (ref) =>
+            navigation.navigate("Thread", {
+              environmentId: String(ref.environmentId),
+              threadId: String(ref.threadId),
+            }),
+        });
+      }
       if (nativeEvent.event === "copy-thread-id") {
         copyTextWithHaptic(thread.id, { target: "thread-id" });
       }
@@ -838,6 +868,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     [
       onNewThreadOnBranch,
       thread,
+      navigation,
       handleArchive,
       handleDelete,
       handleRegenerateTitle,

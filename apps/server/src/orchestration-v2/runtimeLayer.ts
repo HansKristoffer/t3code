@@ -7,6 +7,8 @@ import { layer as providerSessionRuntimeLayer } from "../persistence/ProviderSes
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import { ProviderAuthServiceLive } from "../provider/Layers/ProviderAuthService.ts";
 import { layer as agentSessionImporterLayer } from "../project/AgentSessionImporter.ts";
+import * as RepositoryProjects from "../project/RepositoryProjects.ts";
+import * as ThreadTransferService from "../threadTransfer/ThreadTransferService.ts";
 import * as AgentSessionScanner from "../project/AgentSessionScanner.ts";
 import { layer as projectServiceLayer } from "../project/ProjectService.ts";
 import { layer as projectSetupScriptRunnerLayer } from "../project/ProjectSetupScriptRunner.ts";
@@ -235,6 +237,29 @@ const agentSessionImporterProvided = agentSessionImporterLayer.pipe(
 const threadManagementProvided = threadManagementServiceLayer.pipe(
   Layer.provide(Layer.merge(orchestratorProvided, legacyV1ThreadImporterProvided)),
 );
+const repositoryProjectsProvided = RepositoryProjects.layer.pipe(
+  Layer.provide(
+    Layer.merge(
+      ProjectServiceLayerLive,
+      ManagedProjectFolders.layer.pipe(Layer.provide(ProjectServiceLayerLive)),
+    ),
+  ),
+);
+const threadTransferProvided = ThreadTransferService.layer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      ProjectServiceLayerLive,
+      repositoryProjectsProvided,
+      orchestratorProvided,
+      threadManagementProvided,
+      eventSinkProvided,
+      idAllocatorLayer,
+      providerAdapterRegistryProvided,
+      providerSessionManagerProvided,
+    ),
+  ),
+);
+
 export const ProjectSetupScriptRunnerLayerLive = projectSetupScriptRunnerLayer.pipe(
   Layer.provide(ProjectServiceLayerLive),
 );
@@ -319,6 +344,8 @@ export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
   ),
   providerContinuationWorkerProvided,
   agentSessionImporterProvided,
+  threadTransferProvided,
+  repositoryProjectsProvided,
 ).pipe(
   Layer.provide(Scheduler.layer),
   Layer.provideMerge(OrchestrationEventInfrastructureLayerLive),

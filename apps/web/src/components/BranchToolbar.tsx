@@ -38,7 +38,10 @@ import {
   BranchToolbarBranchSelector,
   type BranchToolbarBranchSelectorHandle,
 } from "./BranchToolbarBranchSelector";
-import { BranchToolbarEnvironmentSelector } from "./BranchToolbarEnvironmentSelector";
+import {
+  BranchToolbarEnvironmentSelector,
+  EnvironmentOptionLabel,
+} from "./BranchToolbarEnvironmentSelector";
 import { BranchToolbarEnvModeSelector } from "./BranchToolbarEnvModeSelector";
 import { PreviousWorktreeItemContent } from "./PreviousWorktreeItemContent";
 import { ComposerControl } from "./chat/ComposerControl";
@@ -88,6 +91,8 @@ interface BranchToolbarProps {
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
   availableEnvironments?: readonly EnvironmentOption[];
+  /** The machine picked for a new thread when it is not the draft's yet: one that clones on create. */
+  selectedEnvironmentId?: EnvironmentId | undefined;
   onEnvironmentChange?: (environmentId: EnvironmentId) => void;
   composerControlsHostRef?: (element: HTMLDivElement | null) => void;
   contextStripVisible?: boolean;
@@ -256,10 +261,7 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
                     value={env.environmentId}
                     closeOnClick
                   >
-                    <span className="flex min-w-0 items-center gap-1.5">
-                      <EnvironmentMachineIcon kind={env.machine} className="size-3" />
-                      <span className="min-w-0 truncate">{env.label}</span>
-                    </span>
+                    <EnvironmentOptionLabel env={env} />
                   </MenuRadioItem>
                 ))}
               </MenuRadioGroup>
@@ -519,10 +521,12 @@ export const BranchToolbar = memo(function BranchToolbar({
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
   availableEnvironments,
+  selectedEnvironmentId,
   onEnvironmentChange,
   composerControlsHostRef,
   contextStripVisible = true,
 }: BranchToolbarProps) {
+  const pickedEnvironmentId = selectedEnvironmentId ?? environmentId;
   const branchSelectorRef = useRef<BranchToolbarBranchSelectorHandle>(null);
   const threadRef = useMemo(
     () => scopeThreadRef(environmentId, threadId),
@@ -604,7 +608,7 @@ export const BranchToolbar = memo(function BranchToolbar({
     availableEnvironments && availableEnvironments.length > 1 && onEnvironmentChange,
   );
   const activeEnvironmentOption =
-    availableEnvironments?.find((env) => env.environmentId === environmentId) ?? null;
+    availableEnvironments?.find((env) => env.environmentId === pickedEnvironmentId) ?? null;
   const showEnvironmentIndicator = shouldShowEnvironmentIndicator({
     activeEnvironment: activeEnvironmentOption,
     canPickEnvironment: showEnvironmentPicker,
@@ -668,7 +672,7 @@ export const BranchToolbar = memo(function BranchToolbar({
             onAutoEnvironment={onAutoEnvironment}
             envLocked={envLocked}
             envModeLocked={envModeLocked}
-            environmentId={environmentId}
+            environmentId={pickedEnvironmentId}
             availableEnvironments={availableEnvironments}
             showEnvironmentPicker={showEnvironmentPicker}
             showEnvironmentIndicator={showEnvironmentIndicator}
@@ -696,7 +700,7 @@ export const BranchToolbar = memo(function BranchToolbar({
                 autoEnvironmentLabel={autoEnvironmentLabel}
                 onAutoEnvironment={onAutoEnvironment}
                 envLocked={envLocked}
-                environmentId={environmentId}
+                environmentId={pickedEnvironmentId}
                 availableEnvironments={availableEnvironments}
                 {...(showEnvironmentPicker && onEnvironmentChange ? { onEnvironmentChange } : {})}
               />

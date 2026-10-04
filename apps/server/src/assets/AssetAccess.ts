@@ -13,6 +13,7 @@ import {
   AssetWorkspacePathValidationError,
   AssetWorkspaceResolutionError,
   AssetWorkspaceRootNormalizationError,
+  THREAD_TRANSFER_URL_TTL_MS,
   ToolActivityNativeAppReference,
 } from "@t3tools/contracts";
 import {
@@ -53,6 +54,7 @@ import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as NativeAppIconResolver from "./NativeAppIconResolver.ts";
 import { openMediaFile, readMediaFileHeader, type OpenMediaFile } from "./MediaFile.ts";
+import { threadTransferPaths } from "../threadTransfer/ThreadTransferFiles.ts";
 
 export const ASSET_ROUTE_PREFIX = "/api/assets";
 
@@ -135,6 +137,13 @@ const AssetClaimsSchema = Schema.Union([
     version: Schema.Literal(1),
     kind: Schema.Literal("native-app-icon"),
     app: ToolActivityNativeAppReference,
+    expiresAt: Schema.Number,
+  }),
+  /** Minted only by the transfer service for the bundle it exported; never from a client resource. */
+  Schema.Struct({
+    version: Schema.Literal(1),
+    kind: Schema.Literal("thread-transfer-bundle"),
+    transferId: Schema.String,
     expiresAt: Schema.Number,
   }),
   Schema.Struct({
@@ -725,6 +734,20 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
   };
 });
 
+/** A download URL for a bundle `ThreadTransferService` exported. */
+export const issueThreadTransferBundleUrl = Effect.fn("AssetAccess.issueThreadTransferBundleUrl")(
+  function* (transferId: string) {
+    const secretStore = yield* ServerSecretStore.ServerSecretStore;
+    const signingSecret = yield* secretStore.getOrCreateRandom(SIGNING_SECRET_NAME, 32);
+    const expiresAt = (yield* Clock.currentTimeMillis) + THREAD_TRANSFER_URL_TTL_MS;
+    const encodedPayload = base64UrlEncode(
+      encodeAssetClaims({ version: 1, kind: "thread-transfer-bundle", transferId, expiresAt }),
+    );
+    const token = `${encodedPayload}.${signPayload(encodedPayload, signingSecret)}`;
+    return { relativeUrl: `${ASSET_ROUTE_PREFIX}/${token}/${transferId}.t3transfer`, expiresAt };
+  },
+);
+
 export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
   token: string,
   relativePath: string,
@@ -770,6 +793,18 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
           ...(claims.mimeType !== undefined ? { mimeType: claims.mimeType } : {}),
         } satisfies ResolvedAsset)
       : null;
+  }
+
+  if (claims.kind === "thread-transfer-bundle") {
+    const config = yield* ServerConfig.ServerConfig;
+    const path = yield* Path.Path;
+    return {
+      kind: "file",
+      path: threadTransferPaths(config.stateDir, path, claims.transferId).outBundle,
+      download: true,
+      fileName: `${claims.transferId}.t3transfer`,
+      mimeType: "application/gzip",
+    } satisfies ResolvedAsset;
   }
 
   if (claims.kind === "project-favicon") {
