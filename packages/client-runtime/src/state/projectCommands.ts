@@ -62,10 +62,19 @@ export class ScratchProjectNotLoadedError extends Schema.TaggedError<ScratchProj
   }
 }
 
+export class ProjectNotLoadedError extends Schema.TaggedError<ProjectNotLoadedError>()(
+  "ProjectNotLoadedError",
+  { projectId: ProjectId },
+) {
+  override get message(): string {
+    return "The new project has not reached this device yet. Try again.";
+  }
+}
+
 export function createProjectEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | Crypto.Crypto | R, E>,
   options: {
-    /** The client store's project; openScratch waits here for the created project. */
+    /** The client store's project; openScratch and openRepository wait here for it. */
     readonly projectAtom: (ref: ScopedProjectRef) => Atom.Atom<EnvironmentProject | null>;
   },
 ) {
@@ -76,6 +85,25 @@ export function createProjectEnvironmentAtoms<R, E>(
       Atom.withLabel(`environment-data:projects:optimistic-file:${key}`),
     ),
   );
+  // Server-created projects arrive through the shell stream; commands resolve once they do.
+  const storedProject = <Err>(
+    registry: AtomRegistry.AtomRegistry,
+    environmentId: EnvironmentId,
+    projectId: ProjectId,
+    notLoaded: () => Err,
+  ) =>
+    AtomRegistry.toStream(registry, options.projectAtom({ environmentId, projectId })).pipe(
+      Stream.filter(Predicate.isNotNull),
+      Stream.runHead,
+      Effect.timeoutOption("10 seconds"),
+      Effect.map(Option.flatten),
+      Effect.flatMap(
+        Option.match({
+          onSome: Effect.succeed,
+          onNone: () => Effect.fail(notLoaded()),
+        }),
+      ),
+    );
   const projectConcurrency = {
     mode: "serial" as const,
     key: ({ environmentId, input }: { environmentId: string; input: { projectId: string } }) =>
@@ -130,17 +158,33 @@ export function createProjectEnvironmentAtoms<R, E>(
       ) =>
         request(WS_METHODS.projectsEnsureScratch, input).pipe(
           Effect.flatMap(({ projectId }) =>
-            AtomRegistry.toStream(registry, options.projectAtom({ environmentId, projectId })).pipe(
-              Stream.filter(Predicate.isNotNull),
-              Stream.runHead,
-              Effect.timeoutOption("10 seconds"),
-              Effect.map(Option.flatten),
-              Effect.flatMap(
-                Option.match({
-                  onSome: Effect.succeed,
-                  onNone: () => Effect.fail(new ScratchProjectNotLoadedError({ projectId })),
-                }),
-              ),
+            storedProject(
+              registry,
+              environmentId,
+              projectId,
+              () => new ScratchProjectNotLoadedError({ projectId }),
+            ),
+          ),
+        ),
+      scheduler: projectScheduler,
+      concurrency: { mode: "serial", key: ({ environmentId }) => environmentId },
+    }),
+    // Finds the environment's project for a repository, or clones it there,
+    // and resolves once the project is in the client store.
+    openRepository: createEnvironmentCommand(runtime, {
+      label: "environment-data:projects:open-repository",
+      execute: (
+        input: EnvironmentRpcInput<typeof WS_METHODS.projectsEnsureRepository>,
+        registry,
+        environmentId,
+      ) =>
+        request(WS_METHODS.projectsEnsureRepository, input).pipe(
+          Effect.flatMap(({ projectId }) =>
+            storedProject(
+              registry,
+              environmentId,
+              projectId,
+              () => new ProjectNotLoadedError({ projectId }),
             ),
           ),
         ),

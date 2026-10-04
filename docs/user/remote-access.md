@@ -62,6 +62,15 @@ created in Settings can only be copied from the client that created them while
 its Connections page stays open. If you leave or reload that page, create
 another link to share.
 
+### Start a thread on another machine
+
+On web and desktop, the composer's machine picker lists every connected machine for a new thread
+in a Git project, including machines that do not have the repository yet. Those are marked
+**Clone**. Choosing one changes nothing until you send: the machine then clones the project's
+`origin` remote into its projects folder, adds the project, and starts the thread there. The clone
+uses that machine's Git credentials. Automatic balancing only picks machines that already have the
+project.
+
 ### Balance new threads across machines
 
 Auto balance is off by default. On web and desktop, enable it in

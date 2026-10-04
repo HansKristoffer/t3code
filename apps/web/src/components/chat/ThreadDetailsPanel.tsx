@@ -28,6 +28,7 @@ import { OpenInPicker } from "./OpenInPicker";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
+import { ThreadTransferPanelRow } from "./ThreadTransferPanelRow";
 
 interface VersionMismatchIssue {
   readonly clientVersion: string;
@@ -53,6 +54,8 @@ export interface ThreadDetailsPanelProps extends Pick<
   isGitRepo: boolean;
   envLocked: boolean;
   availableEnvironments: readonly EnvironmentOption[];
+  /** The machine picked for a new thread when it clones on create; the draft is still elsewhere. */
+  selectedEnvironmentId?: EnvironmentId | undefined;
   autoEnvironmentLabel?: string | undefined;
   onAutoEnvironment?: (() => void) | undefined;
   onEnvironmentChange: (environmentId: EnvironmentId) => void;
@@ -85,9 +88,10 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
   // Same rule as the composer strip: a lone remote machine still gets a row,
   // shown as a static label because there is nothing to pick.
   const canPickEnvironment = props.availableEnvironments.length > 1;
+  const pickedEnvironmentId = props.selectedEnvironmentId ?? props.environmentId;
   const showEnvironment = shouldShowEnvironmentIndicator({
     activeEnvironment:
-      props.availableEnvironments.find((env) => env.environmentId === props.environmentId) ?? null,
+      props.availableEnvironments.find((env) => env.environmentId === pickedEnvironmentId) ?? null,
     canPickEnvironment,
   });
   const branchToolbarProps = {
@@ -156,7 +160,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                   autoEnvironmentLabel={props.autoEnvironmentLabel}
                   onAutoEnvironment={props.onAutoEnvironment}
                   envLocked={props.envLocked}
-                  environmentId={props.environmentId}
+                  environmentId={pickedEnvironmentId}
                   availableEnvironments={props.availableEnvironments}
                   {...(canPickEnvironment
                     ? { onEnvironmentChange: props.onEnvironmentChange }
@@ -191,6 +195,12 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                   onDeleteScript={props.onDeleteProjectScript}
                 />
               ) : null}
+
+              {props.draftId ? null : (
+                <ThreadTransferPanelRow
+                  threadRef={{ environmentId: props.environmentId, threadId: props.threadId }}
+                />
+              )}
             </div>
           </ThreadDetailsSection>
 

@@ -9,6 +9,8 @@ import {
 } from "./chat/threadContextDrag";
 import { discardComposerDraft } from "../lib/discardComposerDraft";
 import { requestCustomSnooze } from "./CustomSnoozeDialog";
+import { requestThreadTransfer } from "./ThreadTransferDialog";
+import { readCanTransferThreadFrom } from "../state/threadTransfer";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
 import { resolveThreadCurrentPullRequestLink } from "@t3tools/shared/threadPullRequests";
 import { useAtomValue } from "@effect/atom-react";
@@ -4488,6 +4490,8 @@ export default function Sidebar() {
                 snooze: supportsSnooze,
                 pinning: supportsPinning,
                 titleRegeneration: supportsTitleRegeneration,
+                transfer:
+                  thread.source.transfer == null && readCanTransferThreadFrom(thread.environmentId),
               },
               snoozePresets,
             }),
@@ -4597,6 +4601,9 @@ export default function Sidebar() {
           }
           case "mark-unread":
             markThreadUnread(threadRef);
+            return;
+          case "transfer":
+            requestThreadTransfer(threadRef);
             return;
           case "copy-path":
             if (!threadWorkspacePath) {

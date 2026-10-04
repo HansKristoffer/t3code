@@ -534,3 +534,27 @@ export class ProjectWriteFileError extends Schema.TaggedError<ProjectWriteFileEr
     } as any);
   }
 }
+
+/** Find this environment's project for a repository, or clone it into the projects folder. */
+export const ProjectEnsureRepositoryInput = Schema.Struct({
+  canonicalKey: TrimmedNonEmptyString,
+  remoteUrl: TrimmedNonEmptyString,
+  title: TrimmedNonEmptyString,
+});
+export type ProjectEnsureRepositoryInput = typeof ProjectEnsureRepositoryInput.Type;
+
+export const ProjectEnsureRepositoryResult = Schema.Struct({
+  projectId: ProjectId,
+  workspaceRoot: TrimmedNonEmptyString,
+  /** False when an existing project already had the repository. */
+  cloned: Schema.Boolean,
+});
+export type ProjectEnsureRepositoryResult = typeof ProjectEnsureRepositoryResult.Type;
+
+export class ProjectEnsureRepositoryError extends Schema.TaggedError<ProjectEnsureRepositoryError>()(
+  "ProjectEnsureRepositoryError",
+  {
+    message: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}

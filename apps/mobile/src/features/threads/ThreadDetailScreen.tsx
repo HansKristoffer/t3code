@@ -37,7 +37,7 @@ import {
   type ProviderSubagentStatus,
 } from "@t3tools/client-runtime/state/thread-execution";
 import { formatModelSlugName, resolveSelectableModel } from "@t3tools/shared/model";
-import { isProviderNativeSubagentThread } from "@t3tools/contracts";
+import { isProviderNativeSubagentThread, type ScopedThreadRef } from "@t3tools/contracts";
 import type { QueuedRunEdit } from "../../state/queued-run-edit";
 import type { FollowUpBehavior } from "../../lib/followUpBehavior";
 import type { ActiveTurnComposerAction } from "@t3tools/client-runtime/state/composer-dispatch";
@@ -108,6 +108,7 @@ import { ComposerFeedback } from "./ComposerFeedback";
 import { ComposerUsageLimits } from "./ComposerUsageLimits";
 import { PendingUserInputCard } from "./PendingUserInputCard";
 import { ProviderSubagentBar } from "./ProviderSubagentBar";
+import { ThreadTransferBar } from "./ThreadTransferBar";
 import { ThreadCreationFailedCard } from "./ThreadCreationFailedCard";
 import {
   FLOATING_WORKING_CONTROL_COVERAGE,
@@ -374,6 +375,16 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const composerEditorRef = useRef<ComposerEditorHandle>(null);
   // A provider-native subagent shows status instead of a composer.
   const isProviderSubagent = isProviderNativeSubagentThread(props.selectedThread.source);
+  // A transferred thread belongs to its copy on the other environment.
+  const threadTransfer = isProviderSubagent ? null : (props.selectedThread.source.transfer ?? null);
+  const openThread = useCallback(
+    (ref: ScopedThreadRef) =>
+      navigation.navigate("Thread", {
+        environmentId: String(ref.environmentId),
+        threadId: String(ref.threadId),
+      }),
+    [navigation],
+  );
   // Entering edit mode from the queue sheet should land in a ready composer,
   // not require a second tap on a composer already holding the message.
   const editingRunId = props.queuedRunEdit?.runId ?? null;
@@ -1300,6 +1311,24 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                                 threadId: String(props.selectedThread.lineage.parentThreadId),
                               })
                       }
+                    />
+                  </View>
+                ) : threadTransfer !== null ? (
+                  <View
+                    className="self-center px-3 pt-1.5"
+                    style={{
+                      width: "100%",
+                      maxWidth: contentMaxWidth,
+                      paddingBottom: composerBottomInset + 6,
+                    }}
+                  >
+                    <ThreadTransferBar
+                      threadRef={{
+                        environmentId: props.environmentId,
+                        threadId: props.selectedThread.id,
+                      }}
+                      transfer={threadTransfer}
+                      openThread={openThread}
                     />
                   </View>
                 ) : (

@@ -69,6 +69,7 @@ function collectEnvironments(environments: ReadonlyMap<EnvironmentId, ListEnviro
   const pinReorderEnvironmentIds = new Set<EnvironmentId>();
   const activeReorderEnvironmentIds = new Set<EnvironmentId>();
   const titleRegenerationEnvironmentIds = new Set<EnvironmentId>();
+  const transferCapableEnvironmentIds = new Set<EnvironmentId>();
   for (const [id, { providers, machineKind, capabilities }] of environments) {
     providersByEnvironmentId.set(id, providers);
     machineByEnvironmentId.set(id, machineKind);
@@ -79,7 +80,13 @@ function collectEnvironments(environments: ReadonlyMap<EnvironmentId, ListEnviro
     if (capabilities.threadPinReorder === true) pinReorderEnvironmentIds.add(id);
     if (capabilities.threadActiveReorder === true) activeReorderEnvironmentIds.add(id);
     if (capabilities.threadTitleRegeneration === true) titleRegenerationEnvironmentIds.add(id);
+    if (capabilities.threadTransfer !== undefined) transferCapableEnvironmentIds.add(id);
   }
+  // A transfer needs a second environment that accepts the thread.
+  const transferEnvironmentIds =
+    transferCapableEnvironmentIds.size > 1
+      ? transferCapableEnvironmentIds
+      : new Set<EnvironmentId>();
   return {
     providersByEnvironmentId,
     machineByEnvironmentId,
@@ -90,6 +97,7 @@ function collectEnvironments(environments: ReadonlyMap<EnvironmentId, ListEnviro
     pinReorderEnvironmentIds,
     activeReorderEnvironmentIds,
     titleRegenerationEnvironmentIds,
+    transferEnvironmentIds,
   };
 }
 
@@ -115,7 +123,9 @@ export function createThreadListEnvironmentsAtom(
         prior.machineKind === selected.machineKind &&
         capabilityKeys.every(
           (key) => (prior.capabilities[key] === true) === (selected.capabilities[key] === true),
-        );
+        ) &&
+        (prior.capabilities.threadTransfer !== undefined) ===
+          (selected.capabilities.threadTransfer !== undefined);
       next.set(id, unchanged ? prior : selected);
       if (!unchanged) changed = true;
     }

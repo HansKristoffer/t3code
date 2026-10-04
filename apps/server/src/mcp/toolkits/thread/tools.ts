@@ -29,7 +29,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 const ThreadOrganizeTool = Tool.make("t3_thread_organize", {
   description:
-    "Pin, snooze, settle, archive, or mark a thread unread in the calling project. Omit threadId for this thread. snooze requires snoozedUntil. Existing thread lifecycle rules apply; this does not schedule a future action.",
+    "Pin, snooze, settle, archive, or mark a thread unread in the calling project. Omit threadId for this thread. snooze requires snoozedUntil. Existing thread lifecycle rules apply; this does not schedule a future action. Moving a thread to another environment is not available here: it needs a client connected to both environments.",
   parameters: Schema.Struct({
     threadId: Schema.optional(ThreadId),
     action: Schema.Literals([

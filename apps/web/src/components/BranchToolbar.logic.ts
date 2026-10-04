@@ -16,8 +16,10 @@ export {
 
 export interface EnvironmentOption {
   environmentId: EnvironmentId;
-  /** Null when the machine's "No project" folder is not created yet. */
+  /** Null when the machine's "No project" folder is not created yet, or for `cloneOnCreate`. */
   projectId: ProjectId | null;
+  /** The machine does not have this repository yet; sending clones it there first. */
+  cloneOnCreate?: boolean;
   label: string;
   isPrimary: boolean;
   machine: EnvironmentMachineKind;

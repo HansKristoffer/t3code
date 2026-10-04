@@ -9,6 +9,7 @@ import {
   CheckpointRef,
   CommandId,
   ContextTransferId,
+  EnvironmentId,
   EventId,
   MessageId,
   NodeId,
@@ -2789,6 +2790,114 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
       assert.isNull(projection.thread.settledOverride);
       assert.isNull(projection.thread.settledAt);
       assert.isNotNull(projection.thread.unsettledAt);
+    }),
+  );
+
+  it.effect("locks a thread for transfer, archives it on completion, and unlocks on abort", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const create = (threadId: ThreadId) =>
+        orchestrator.dispatch({
+          type: "thread.create",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make(`${threadId}-create`),
+          threadId,
+          projectId: ProjectId.make("runtime-layer-transfer-project"),
+          title: "Transfer",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: "/tmp/runtime-layer-transfer",
+        });
+      const send = (threadId: ThreadId, id: string) =>
+        orchestrator.dispatch({
+          type: "message.dispatch",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make(id),
+          threadId,
+          messageId: MessageId.make(id),
+          text: "Keep going.",
+          attachments: [],
+          modelSelection,
+          dispatchMode: { type: "start_immediately" },
+        });
+      const transfer = (
+        type: "thread.transfer-out.begin" | "thread.transfer-out.abort",
+        threadId: ThreadId,
+        transferId: string,
+      ) =>
+        orchestrator.dispatch({
+          type,
+          commandId: CommandId.make(`${threadId}-${type}-${transferId}`),
+          threadId,
+          transferId,
+        });
+
+      const busy = ThreadId.make("runtime-layer-transfer-busy");
+      yield* create(busy);
+      yield* send(busy, "runtime-layer-transfer-busy-message");
+      const busyBegin = yield* transfer("thread.transfer-out.begin", busy, "t-busy").pipe(
+        Effect.flip,
+      );
+      assert.instanceOf(busyBegin, Orchestrator.OrchestratorDispatchError);
+
+      const threadId = ThreadId.make("runtime-layer-transfer-idle");
+      yield* create(threadId);
+      yield* transfer("thread.transfer-out.begin", threadId, "t-1");
+      assert.deepEqual((yield* orchestrator.getThreadShell(threadId))?.transfer, {
+        transferId: "t-1",
+        status: "exporting",
+      });
+      const locked = yield* send(threadId, "runtime-layer-transfer-locked").pipe(Effect.flip);
+      assert.instanceOf(locked, Orchestrator.OrchestratorDispatchError);
+      const competing = yield* transfer("thread.transfer-out.begin", threadId, "t-2").pipe(
+        Effect.flip,
+      );
+      assert.instanceOf(competing, Orchestrator.OrchestratorDispatchError);
+
+      // An abort for another transfer changes nothing; the matching one unlocks.
+      yield* transfer("thread.transfer-out.abort", threadId, "t-2");
+      assert.equal((yield* orchestrator.getThreadShell(threadId))?.transfer?.transferId, "t-1");
+      yield* transfer("thread.transfer-out.abort", threadId, "t-1");
+      assert.isUndefined((yield* orchestrator.getThreadShell(threadId))?.transfer);
+      yield* send(threadId, "runtime-layer-transfer-after-abort");
+
+      const done = ThreadId.make("runtime-layer-transfer-done");
+      yield* create(done);
+      yield* transfer("thread.transfer-out.begin", done, "t-3");
+      const destination = {
+        environmentId: EnvironmentId.make("env-b"),
+        threadId: ThreadId.make("transfer-t-3"),
+        environmentLabel: "Cloud VM",
+      };
+      const completeCommand = {
+        type: "thread.transfer-out.complete" as const,
+        commandId: CommandId.make("runtime-layer-transfer-complete"),
+        threadId: done,
+        transferId: "t-3",
+        destination,
+      };
+      yield* orchestrator.dispatch(completeCommand);
+      yield* orchestrator.dispatch({
+        ...completeCommand,
+        commandId: CommandId.make("runtime-layer-transfer-complete-retry"),
+      });
+      const shell = yield* orchestrator.getThreadShell(done);
+      assert.deepEqual(shell?.transfer, { transferId: "t-3", status: "completed", destination });
+      assert.isNotNull(shell?.archivedAt);
+      // Unarchiving keeps the thread read-only.
+      yield* orchestrator.dispatch({
+        type: "thread.unarchive",
+        commandId: CommandId.make("runtime-layer-transfer-unarchive"),
+        threadId: done,
+      });
+      const readOnly = yield* send(done, "runtime-layer-transfer-after-complete").pipe(Effect.flip);
+      assert.instanceOf(readOnly, Orchestrator.OrchestratorDispatchError);
+      const lateAbort = yield* transfer("thread.transfer-out.abort", done, "t-3").pipe(Effect.flip);
+      assert.instanceOf(lateAbort, Orchestrator.OrchestratorDispatchError);
     }),
   );
 

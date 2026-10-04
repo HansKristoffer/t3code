@@ -45,6 +45,7 @@ import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import {
   ArrowLeftIcon,
+  ArrowRightLeftIcon,
   ChartNoAxesColumnIcon,
   CheckIcon,
   ChevronRightIcon,
@@ -187,6 +188,8 @@ import { Checkbox } from "./ui/checkbox";
 import { ProjectFavicon } from "./ProjectFavicon";
 import { ProjectFilePicker } from "./files/ProjectFilePicker";
 import { openLinkPullRequestDialog } from "./pullRequest/LinkPullRequestDialog";
+import { requestThreadTransfer } from "./ThreadTransferDialog";
+import { readCanTransferThreadFrom } from "../state/threadTransfer";
 import { ProjectContentSearchDialog } from "./search/ProjectContentSearchDialog";
 import { toggleThemeEditorForTheme } from "./settings/themeEditorStore";
 import { searchSettings, SETTINGS_SECTION_LABELS } from "./settings/settingsSearch";
@@ -1973,6 +1976,24 @@ function OpenCommandPaletteDialog(props: {
         },
       });
     }
+  }
+
+  if (
+    activeThread !== null &&
+    activeThread.source.transfer == null &&
+    readCanTransferThreadFrom(activeThread.environmentId)
+  ) {
+    const threadRef = scopeThreadRef(activeThread.environmentId, activeThread.id);
+    actionItems.push({
+      kind: "action",
+      value: "action:transfer-thread",
+      searchTerms: ["transfer", "move", "environment", "machine", "remote", "handoff"],
+      title: "Transfer thread to environment…",
+      icon: <ArrowRightLeftIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        requestThreadTransfer(threadRef);
+      },
+    });
   }
 
   if (activeThread !== null) {

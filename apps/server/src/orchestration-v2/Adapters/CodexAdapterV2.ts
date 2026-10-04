@@ -81,6 +81,7 @@ import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
+import { makeCodexNativeSessionTransfer } from "./NativeSessionTransfer.ts";
 import { getCodexServiceTierOptionValue } from "../../codexModelOptions.ts";
 import { ServerConfig } from "../../config.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
@@ -142,6 +143,7 @@ import {
   ProviderAdapterSteerRunError,
   ProviderAdapterTurnStartError,
   ProviderAdapterV2,
+  type ProviderAdapterV2NativeSessionTransfer,
   type ProviderAdapterV2Shape,
   type ProviderAdapterV2Event,
   type ProviderAdapterV2ForkThreadInput,
@@ -1473,10 +1475,20 @@ export const createCodexAdapterV2 = (
       homePath: homeLayout.effectiveHomePath ?? "",
     } satisfies CodexSettings;
 
+    const mergedEnvironment = mergeProviderInstanceEnvironment(environment, hostEnvironment);
     return makeCodexAdapterV2({
       instanceId,
       settings,
-      environment: mergeProviderInstanceEnvironment(environment, hostEnvironment),
+      environment: mergedEnvironment,
+      nativeSessionTransfer: makeCodexNativeSessionTransfer({
+        // Rollouts live in the shared home; an unset home follows the inherited CODEX_HOME.
+        homePath:
+          homeLayout.mode === "authOverlay" || config.homePath.trim().length > 0
+            ? homeLayout.sharedHomePath
+            : mergedEnvironment.CODEX_HOME?.trim() || homeLayout.sharedHomePath,
+        fileSystem,
+        path: yield* Path.Path,
+      }),
       clientFactory,
       fileSystem,
       idAllocator,
@@ -1535,6 +1547,7 @@ export interface CodexAdapterV2Options {
   readonly fileSystem: FileSystem.FileSystem;
   readonly idAllocator: IdAllocatorV2Shape;
   readonly serverConfig: ServerConfig["Service"];
+  readonly nativeSessionTransfer?: ProviderAdapterV2NativeSessionTransfer;
   /**
    * Sink for post-settle background command completions so the orchestrator
    * can start a continuation run. Optional: adapters that omit it keep
@@ -1552,6 +1565,9 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
   return ProviderAdapterV2.of({
     instanceId: adapterOptions.instanceId,
     driver: CODEX_PROVIDER,
+    ...(adapterOptions.nativeSessionTransfer === undefined
+      ? {}
+      : { nativeSessionTransfer: adapterOptions.nativeSessionTransfer }),
     getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
     planSelectionTransition: () => Effect.succeed(turnScopedSelectionTransition()),
     openSession: (input) =>

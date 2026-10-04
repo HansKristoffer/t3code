@@ -334,7 +334,27 @@ import {
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
-import { Project, ProjectMutation, ProjectMutationError } from "./project.ts";
+import {
+  Project,
+  ProjectEnsureRepositoryError,
+  ProjectEnsureRepositoryInput,
+  ProjectEnsureRepositoryResult,
+  ProjectMutation,
+  ProjectMutationError,
+} from "./project.ts";
+import {
+  ThreadTransferAbortInput,
+  ThreadTransferCompleteInput,
+  ThreadTransferCreateUploadUrlInput,
+  ThreadTransferCreateUploadUrlResult,
+  ThreadTransferError,
+  ThreadTransferExportInput,
+  ThreadTransferExportResult,
+  ThreadTransferImportInput,
+  ThreadTransferImportResult,
+  ThreadTransferPreflightInput,
+  ThreadTransferPreflightResult,
+} from "./threadTransfer.ts";
 
 export const WS_METHODS = {
   // Project registry methods
@@ -348,6 +368,7 @@ export const WS_METHODS = {
   projectsWriteFile: "projects.writeFile",
   projectsMutate: "projects.mutate",
   projectsEnsureScratch: "projects.ensureScratch",
+  projectsEnsureRepository: "projects.ensureRepository",
   projectsCreateNew: "projects.createNew",
 
   // Shell methods
@@ -361,6 +382,14 @@ export const WS_METHODS = {
   assetsPersistChatAttachments: "assets.persistChatAttachments",
   attachmentsCreateUploadUrl: "attachments.createUploadUrl",
   attachmentsDelete: "attachments.delete",
+
+  // Thread transfer between environments, brokered by a client connected to both
+  threadTransferExport: "threadTransfer.export",
+  threadTransferPreflight: "threadTransfer.preflight",
+  threadTransferCreateUploadUrl: "threadTransfer.createUploadUrl",
+  threadTransferImport: "threadTransfer.import",
+  threadTransferComplete: "threadTransfer.complete",
+  threadTransferAbort: "threadTransfer.abort",
 
   // Provider methods
   providerUploadFeedback: "provider.uploadFeedback",
@@ -1159,6 +1188,12 @@ const WsProjectsMutateRpc = Rpc.make(WS_METHODS.projectsMutate, {
 });
 
 // Finds or creates the Scratch project rooted at ServerConfig.scratchWorkspaceRoot.
+const WsProjectsEnsureRepositoryRpc = Rpc.make(WS_METHODS.projectsEnsureRepository, {
+  payload: ProjectEnsureRepositoryInput,
+  success: ProjectEnsureRepositoryResult,
+  error: Schema.Union([ProjectEnsureRepositoryError, EnvironmentAuthorizationError]),
+});
+
 const WsProjectsEnsureScratchRpc = Rpc.make(WS_METHODS.projectsEnsureScratch, {
   payload: Schema.Struct({}),
   success: ProjectEnsureScratchResult,
@@ -1221,6 +1256,42 @@ const WsAttachmentsCreateUploadUrlRpc = Rpc.make(WS_METHODS.attachmentsCreateUpl
 const WsAttachmentsDeleteRpc = Rpc.make(WS_METHODS.attachmentsDelete, {
   payload: AttachmentDeleteInput,
   error: EnvironmentAuthorizationError,
+});
+
+const ThreadTransferRpcError = Schema.Union([ThreadTransferError, EnvironmentAuthorizationError]);
+
+const WsThreadTransferExportRpc = Rpc.make(WS_METHODS.threadTransferExport, {
+  payload: ThreadTransferExportInput,
+  success: ThreadTransferExportResult,
+  error: ThreadTransferRpcError,
+});
+
+const WsThreadTransferPreflightRpc = Rpc.make(WS_METHODS.threadTransferPreflight, {
+  payload: ThreadTransferPreflightInput,
+  success: ThreadTransferPreflightResult,
+  error: ThreadTransferRpcError,
+});
+
+const WsThreadTransferCreateUploadUrlRpc = Rpc.make(WS_METHODS.threadTransferCreateUploadUrl, {
+  payload: ThreadTransferCreateUploadUrlInput,
+  success: ThreadTransferCreateUploadUrlResult,
+  error: ThreadTransferRpcError,
+});
+
+const WsThreadTransferImportRpc = Rpc.make(WS_METHODS.threadTransferImport, {
+  payload: ThreadTransferImportInput,
+  success: ThreadTransferImportResult,
+  error: ThreadTransferRpcError,
+});
+
+const WsThreadTransferCompleteRpc = Rpc.make(WS_METHODS.threadTransferComplete, {
+  payload: ThreadTransferCompleteInput,
+  error: ThreadTransferRpcError,
+});
+
+const WsThreadTransferAbortRpc = Rpc.make(WS_METHODS.threadTransferAbort, {
+  payload: ThreadTransferAbortInput,
+  error: ThreadTransferRpcError,
 });
 
 const WsProviderUploadFeedbackRpc = Rpc.make(WS_METHODS.providerUploadFeedback, {
@@ -1799,6 +1870,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectsSearchContentsRpc,
   WsProjectsSearchEntriesRpc,
   WsProjectsEnsureScratchRpc,
+  WsProjectsEnsureRepositoryRpc,
   WsProjectsCreateNewRpc,
   WsProjectsWriteFileRpc,
   WsProjectsMutateRpc,
@@ -1810,6 +1882,12 @@ export const WsRpcGroup = RpcGroup.make(
   WsAssetsPersistChatAttachmentsRpc,
   WsAttachmentsCreateUploadUrlRpc,
   WsAttachmentsDeleteRpc,
+  WsThreadTransferExportRpc,
+  WsThreadTransferPreflightRpc,
+  WsThreadTransferCreateUploadUrlRpc,
+  WsThreadTransferImportRpc,
+  WsThreadTransferCompleteRpc,
+  WsThreadTransferAbortRpc,
   WsProviderUploadFeedbackRpc,
   WsSubscribeVcsStatusRpc,
   WsSubscribeWorktreeSetupRpc,

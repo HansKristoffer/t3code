@@ -32,6 +32,7 @@ import type {
   MessageId,
 } from "@t3tools/contracts";
 import {
+  hasRunlessHistory,
   OrchestrationV2AppThreadJson as OrchestrationV2AppThreadJsonSchema,
   OrchestrationV2CheckpointJson as OrchestrationV2CheckpointJsonSchema,
   OrchestrationV2CheckpointScopeJson as OrchestrationV2CheckpointScopeJsonSchema,
@@ -667,6 +668,7 @@ export function applyToProjection(
     case "thread.interaction-mode-updated":
     case "thread.model-selection-updated":
     case "thread.provider-switched":
+    case "thread.transfer-updated":
       return {
         ...base,
         thread: event.payload,
@@ -1216,7 +1218,7 @@ export function isTurnItemAtOrBeforeRun(input: {
   readonly sourceRunOrdinal: number;
 }): boolean {
   if (input.itemRunId === null) {
-    return input.historyOrigin === "v1_import";
+    return hasRunlessHistory(input.historyOrigin);
   }
   const ordinal = input.runOrdinalById.get(input.itemRunId);
   return ordinal !== undefined && ordinal <= input.sourceRunOrdinal;
@@ -1375,6 +1377,10 @@ export function threadShellFromProjection(
     ...(projection.thread.historyOrigin === undefined
       ? {}
       : { historyOrigin: projection.thread.historyOrigin }),
+    ...(projection.thread.transfer == null ? {} : { transfer: projection.thread.transfer }),
+    ...(projection.thread.transferredFrom == null
+      ? {}
+      : { transferredFrom: projection.thread.transferredFrom }),
     latestRunId: latestRun?.id ?? null,
     latestRunRequestedAt: latestRun?.requestedAt ?? null,
     latestRunStartedAt: latestRun?.startedAt ?? null,
@@ -1526,7 +1532,9 @@ function itemCountThroughRun(input: {
     return 0;
   }
 
-  let count = input.state.thread.historyOrigin === "v1_import" ? input.state.runlessItemCount : 0;
+  let count = hasRunlessHistory(input.state.thread.historyOrigin)
+    ? input.state.runlessItemCount
+    : 0;
   for (const [runId, itemCount] of input.state.itemCountByRunId) {
     const itemRunOrdinal = input.state.runOrdinalById.get(runId);
     if (itemRunOrdinal !== undefined && itemRunOrdinal <= runOrdinal) {
@@ -1611,6 +1619,10 @@ function shellFromState(input: {
     ...(input.state.thread.historyOrigin === undefined
       ? {}
       : { historyOrigin: input.state.thread.historyOrigin }),
+    ...(input.state.thread.transfer == null ? {} : { transfer: input.state.thread.transfer }),
+    ...(input.state.thread.transferredFrom == null
+      ? {}
+      : { transferredFrom: input.state.thread.transferredFrom }),
     latestRunId: input.state.latestRunId,
     latestRunRequestedAt: input.state.latestRunRequestedAt,
     latestRunStartedAt: input.state.latestRunStartedAt,
@@ -1699,7 +1711,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           case "thread.runtime-mode-updated":
           case "thread.interaction-mode-updated":
           case "thread.model-selection-updated":
-          case "thread.provider-switched": {
+          case "thread.provider-switched":
+          case "thread.transfer-updated": {
             const payloadJson = yield* encodeThreadPayload(event.payload);
             const payload = parseEncodedPayload(payloadJson);
             yield* sql`
@@ -2529,7 +2542,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           event.type !== "thread.runtime-mode-updated" &&
           event.type !== "thread.interaction-mode-updated" &&
           event.type !== "thread.model-selection-updated" &&
-          event.type !== "thread.provider-switched"
+          event.type !== "thread.provider-switched" &&
+          event.type !== "thread.transfer-updated"
         ) {
           const rows = yield* sql<PayloadRow>`
             SELECT payload_json
@@ -2636,7 +2650,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                           SELECT 1
                           FROM orchestration_v2_projection_threads AS source_thread
                           WHERE source_thread.thread_id = item.thread_id
-                            AND json_extract(source_thread.payload_json, '$.historyOrigin') = 'v1_import'
+                            AND json_extract(source_thread.payload_json, '$.historyOrigin') IN ('v1_import', 'transfer')
                         )
                       )
                       OR run.ordinal <= (

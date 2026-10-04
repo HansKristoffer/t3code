@@ -12,6 +12,7 @@ import {
   THREAD_DETAILS_PANEL_LOCKED_ROW_CLASS,
 } from "./chat/threadDetailsPanelStyles";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
+import { Badge } from "./ui/badge";
 import { useComposerMenuProps } from "./chat/composerEventScope";
 import {
   Select,
@@ -21,6 +22,21 @@ import {
   SelectPopup,
   SelectValue,
 } from "./ui/select";
+
+/** A machine in a "Run on" list, tagged when choosing it clones the repository there. */
+export function EnvironmentOptionLabel({ env }: { readonly env: EnvironmentOption }) {
+  return (
+    <span className="flex min-w-0 items-center gap-1.5">
+      <EnvironmentMachineIcon kind={env.machine} className="size-3" />
+      <span className="min-w-0 truncate">{env.label}</span>
+      {env.cloneOnCreate ? (
+        <Badge size="sm" variant="info">
+          Clone
+        </Badge>
+      ) : null}
+    </span>
+  );
+}
 
 interface BranchToolbarEnvironmentSelectorProps {
   autoEnvironmentLabel?: string | undefined;
@@ -158,10 +174,7 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
           )}
           {availableEnvironments.map((env) => (
             <SelectItem key={env.environmentId} value={env.environmentId}>
-              <span className="inline-flex items-center gap-1.5">
-                <EnvironmentMachineIcon kind={env.machine} className="size-3" />
-                {env.label}
-              </span>
+              <EnvironmentOptionLabel env={env} />
             </SelectItem>
           ))}
         </SelectGroup>

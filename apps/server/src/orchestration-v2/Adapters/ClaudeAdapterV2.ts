@@ -96,7 +96,9 @@ import { expandHomePath } from "../../pathExpansion.ts";
 import {
   claudeSignedOutMessage,
   makeClaudeEnvironment,
+  resolveClaudeHomePath,
 } from "../../provider/Drivers/ClaudeHome.ts";
+import { makeClaudeNativeSessionTransfer } from "./NativeSessionTransfer.ts";
 import {
   BUNDLED_CLAUDE_MODEL_CATALOG,
   resolveClaudeCatalogContextWindow,
@@ -2949,6 +2951,8 @@ export interface ClaudeAdapterV2Options {
   readonly path: Path.Path;
   readonly idAllocator: IdAllocator.IdAllocatorV2Shape;
   readonly queryRunner: ClaudeAgentSdkQueryRunnerShape;
+  /** The resolved Claude config directory; enables thread transfer when set. */
+  readonly configDir?: string;
   readonly scopedLimitNames?: Ref.Ref<ClaudeScopedLimitNames>;
   readonly onUsageLimits?: ServerProviderShape["applyUsageLimits"];
   /** Sink for wake-turn continuation requests; defaults to dropping them. */
@@ -2992,6 +2996,15 @@ export function makeClaudeAdapterV2(
   return ProviderAdapter.ProviderAdapterV2.of({
     instanceId: adapterOptions.instanceId,
     driver: CLAUDE_PROVIDER,
+    ...(adapterOptions.configDir === undefined
+      ? {}
+      : {
+          nativeSessionTransfer: makeClaudeNativeSessionTransfer({
+            homePath: adapterOptions.configDir,
+            fileSystem,
+            path,
+          }),
+        }),
     getCapabilities: () => Effect.succeed(ClaudeProviderCapabilitiesV2),
     planSelectionTransition: () => Effect.succeed(turnScopedSelectionTransition()),
     openSession: Effect.fn("ClaudeAdapterV2.openSession")(
@@ -7793,6 +7806,7 @@ export const createClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2Driver.create")(
       instanceId,
       settings: { ...config, enabled, binaryPath },
       environment: claudeEnvironment,
+      configDir: yield* resolveClaudeHomePath(config, claudeEnvironment),
       attachmentsDir: serverConfig.attachmentsDir,
       fileSystem,
       path,
