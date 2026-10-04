@@ -149,10 +149,12 @@ export const ThreadTransferPreflightResult = Schema.Struct({
   instanceId: Schema.NullOr(ProviderInstanceId),
   /** Null when the import clones the repository first and plans the workspace there. */
   workspace: Schema.NullOr(ThreadTransferWorkspace),
-  /** The destination checkout is merely behind the source commit and can fast-forward to it. */
-  canFastForward: Schema.Boolean,
-  /** The import puts the destination on the source's code, uncommitted files included. */
-  carriesSourceCode: Schema.optional(Schema.Boolean),
+  /**
+   * The import moves the destination's checkout to the source's commit, plus
+   * its uncommitted files when they came along. Only when that loses nothing
+   * here: same branch, clean, and not ahead of or apart from the source.
+   */
+  carriesSourceCode: Schema.Boolean,
 });
 export type ThreadTransferPreflightResult = typeof ThreadTransferPreflightResult.Type;
 
@@ -174,7 +176,6 @@ export const ThreadTransferImportInput = Schema.Struct({
   projectId: Schema.NullOr(ProjectId),
   instanceId: ProviderInstanceId,
   workspace: Schema.NullOr(ThreadTransferWorkspace),
-  fastForwardToSource: Schema.Boolean,
 });
 export type ThreadTransferImportInput = typeof ThreadTransferImportInput.Type;
 

@@ -39,14 +39,14 @@ stashed.
 
 The destination keeps its own code instead, and warns you, when its checkout has uncommitted
 changes, is on another branch, or has commits the source does not. If the source cannot push, for
-example without write access to `origin`, the destination warns about what stays behind. When the
-destination is only behind,
-you can still fast-forward it to the source's commit as part of the transfer.
+example without write access to `origin`, the destination still moves to the source's commit when
+it can, and warns about the files that stay behind.
 
 ## After transferring
 
 Your client opens the thread on the destination. It continues there with its history and the
-provider's own session, so the agent remembers the conversation. The original is archived and
+provider's own session, so the agent remembers the conversation. A note in the conversation marks
+each move, such as "Transferred from Laptop to Server". The original is archived and
 becomes read-only, with a link to its copy. To move the thread back, transfer the copy.
 
 These stay on the source:

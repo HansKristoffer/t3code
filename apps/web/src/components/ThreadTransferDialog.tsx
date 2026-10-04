@@ -24,7 +24,6 @@ import { randomUUID } from "../lib/utils";
 import { buildThreadRouteParams } from "../threadRoutes";
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
-import { Checkbox } from "./ui/checkbox";
 import {
   Dialog,
   DialogDescription,
@@ -92,7 +91,6 @@ function ThreadTransferDialog({ request }: { readonly request: Request }) {
   const target = targets.find((candidate) => candidate.environmentId === targetId) ?? null;
   const [transferId] = useState(() => request.transferId ?? randomUUID());
   const [phase, setPhase] = useState<Phase>({ kind: "choose" });
-  const [fastForward, setFastForward] = useState(false);
   // The destination clones this repository when it has no project for it yet.
   const [preparedClone, setPreparedClone] = useState<string | null>(null);
   const busy = phase.kind === "preparing" || phase.kind === "running";
@@ -122,7 +120,6 @@ function ThreadTransferDialog({ request }: { readonly request: Request }) {
     void finish(
       () =>
         finishThreadTransfer(webThreadTransferDeps, prepared, {
-          fastForwardToSource: fastForward,
           destinationLabel: target?.label,
           onStep: (step, fraction) => {
             const percent = fraction === undefined ? null : Math.round(fraction * 100);
@@ -166,7 +163,6 @@ function ThreadTransferDialog({ request }: { readonly request: Request }) {
         targetEnvironmentId: target.environmentId,
         transferId,
       });
-      setFastForward(false);
       setPreparedClone(prepared.preflight.newProject?.title ?? null);
       // Only blockers and warnings need a second look; otherwise OK means go.
       if (prepared.preflight.blockers.length === 0 && prepared.preflight.warnings.length === 0) {
@@ -250,12 +246,7 @@ function ThreadTransferDialog({ request }: { readonly request: Request }) {
               </p>
             ) : null}
             {phase.kind === "review" ? (
-              <TransferReview
-                prepared={phase.prepared}
-                sourceLabel={sourceLabel}
-                fastForward={fastForward}
-                onFastForwardChange={setFastForward}
-              />
+              <TransferReview prepared={phase.prepared} sourceLabel={sourceLabel} />
             ) : null}
             {phase.kind === "failed" ? (
               <Alert variant="error">
@@ -321,8 +312,6 @@ function ThreadTransferDialog({ request }: { readonly request: Request }) {
 function TransferReview(props: {
   readonly prepared: PreparedThreadTransfer;
   readonly sourceLabel: string;
-  readonly fastForward: boolean;
-  readonly onFastForwardChange: (value: boolean) => void;
 }) {
   const { preflight } = props.prepared;
   return (
@@ -355,15 +344,6 @@ function TransferReview(props: {
         <p className="text-muted-foreground">
           {`This environment doesn't have the repository yet. It will clone ${preflight.newProject.remoteUrl} and add it as a project.`}
         </p>
-      ) : null}
-      {preflight.canFastForward ? (
-        <label className="flex items-center gap-2">
-          <Checkbox
-            checked={props.fastForward}
-            onCheckedChange={(checked) => props.onFastForwardChange(checked === true)}
-          />
-          Fast-forward to the source commit first
-        </label>
       ) : null}
       {preflight.blockers.length === 0 ? (
         <p className="text-muted-foreground">

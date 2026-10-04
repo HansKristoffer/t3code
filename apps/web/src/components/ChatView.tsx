@@ -288,7 +288,6 @@ import { isEditableFocused } from "../lib/editableFocus";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import {
   AlarmClockIcon,
-  ArrowRightLeftIcon,
   CheckCircle2Icon,
   PaperclipIcon,
   ChevronDownIcon,
@@ -428,7 +427,6 @@ import type { AssistantCitationRequest } from "./chat/AssistantCitationSource";
 import { MessagesTimeline, type MessagesTimelineHistoryControls } from "./chat/MessagesTimeline";
 import { ProviderSubagentBar } from "./chat/ProviderSubagentBar";
 import { ThreadTransferBar } from "./chat/ThreadTransferBar";
-import { useTransferPeer } from "../state/threadTransfer";
 import { getTriggerDisplayModelName } from "./chat/providerIconUtils";
 import { resolveTimelineIsAtEnd, worktreeSetupAgentStarted } from "./chat/MessagesTimeline.logic";
 import {
@@ -7260,24 +7258,6 @@ export default function ChatView(props: ChatViewProps) {
       onDismiss: acknowledgeActiveThreadWoke,
     };
   }, [acknowledgeActiveThreadWoke, activeThread?.id, activeThreadWokeVisible]);
-  // Says where an imported thread came from until it runs here.
-  const transferredFrom = serverThread?.source.transferredFrom ?? null;
-  const transferSource = useTransferPeer(transferredFrom);
-  const transferredFromVisible = transferredFrom !== null && serverProjection?.runs.length === 0;
-  const transferredFromBannerItem = useMemo<ComposerBannerStackItem | null>(
-    () =>
-      !transferredFromVisible
-        ? null
-        : {
-            id: `transferred-from:${activeThread?.id ?? "unknown"}`,
-            variant: "info",
-            priority: "notice",
-            icon: <ArrowRightLeftIcon />,
-            title: `Transferred from ${transferSource.label}`,
-            description: "The agent continues its session here.",
-          },
-    [activeThread?.id, transferSource.label, transferredFromVisible],
-  );
   const parkedThreadBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
     if (!activeThreadSnoozed && !activeThreadSettled) {
       return null;
@@ -7470,7 +7450,6 @@ export default function ChatView(props: ChatViewProps) {
       resumeCompactionBannerItem === null ? [] : [resumeCompactionBannerItem];
     const wokeThreadItems = wokeThreadBannerItem === null ? [] : [wokeThreadBannerItem];
     const parkedThreadItems = [
-      ...(transferredFromBannerItem === null ? [] : [transferredFromBannerItem]),
       ...(parkedThreadBannerItem === null ? [] : [parkedThreadBannerItem]),
     ];
     // The user asked for this one, so it leads the notice tier instead of trailing it.
@@ -7553,7 +7532,6 @@ export default function ChatView(props: ChatViewProps) {
     resumeCompactionBannerItem,
     showBranchMismatchBanner,
     systemComposerBannerItems,
-    transferredFromBannerItem,
     usageLimitsBanner,
     wokeThreadBannerItem,
   ]);

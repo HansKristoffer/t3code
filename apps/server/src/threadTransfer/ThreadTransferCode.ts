@@ -139,15 +139,15 @@ export const fetchCodeSnapshot = Effect.fn("ThreadTransferCode.fetchCodeSnapshot
 });
 
 /**
- * Moves a clean checkout at or behind the source commit onto it, then
- * restores the snapshot's tree over it so the source's uncommitted changes,
- * deletions included, come back uncommitted.
+ * Moves a clean checkout at or behind the source commit onto it. With a
+ * snapshot that holds uncommitted files, then restores its tree over the
+ * commit so those changes, deletions included, come back uncommitted.
  */
-export const applyCodeSnapshot = Effect.fn("ThreadTransferCode.applyCodeSnapshot")(function* (
+export const moveToSourceCode = Effect.fn("ThreadTransferCode.moveToSourceCode")(function* (
   git: GitRun,
   cwd: string,
   headSha: string,
-  snapshot: CodeSnapshot,
+  snapshot: CodeSnapshot | null,
 ) {
   if (
     (yield* git(cwd, ["rev-parse", "HEAD"])) !== headSha &&
@@ -158,7 +158,7 @@ export const applyCodeSnapshot = Effect.fn("ThreadTransferCode.applyCodeSnapshot
     });
   }
   if (
-    snapshot.uncommitted &&
+    snapshot?.uncommitted === true &&
     (yield* git(cwd, ["restore", `--source=${snapshot.sha}`, "--worktree", "--", "."])) === null
   ) {
     return yield* new ThreadTransferError({
