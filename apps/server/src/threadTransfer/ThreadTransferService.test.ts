@@ -52,6 +52,7 @@ import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as McpSessionRegistryTestkit from "../mcp/McpSessionRegistry.testkit.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as ProjectService from "../project/ProjectService.ts";
+import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as RepositoryProjects from "../project/RepositoryProjects.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import type { ProviderInstance } from "../provider/ProviderDriver.ts";
@@ -145,6 +146,7 @@ const projectsRoot = NodeFS.realpathSync(
   NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-transfer-projects-")),
 );
 const clones: Array<{ readonly remoteUrl: string; readonly destinationPath: string }> = [];
+const setupRuns: Array<string> = [];
 const gitResult = (exitCode: number, stdout: string) =>
   Effect.succeed({
     exitCode,
@@ -218,6 +220,15 @@ const TestLayer = ThreadTransferService.layer.pipe(
   ),
   Layer.provide(
     Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: projectsRoot }),
+  ),
+  Layer.provide(
+    Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({
+      runForThread: ({ worktreePath }) =>
+        Effect.sync(() => {
+          setupRuns.push(worktreePath);
+          return { status: "no-script" } as const;
+        }),
+    }),
   ),
   Layer.provide(
     Layer.mock(SourceControlRepositoryService.SourceControlRepositoryService)({
@@ -427,6 +438,8 @@ it.layer(TestLayer)("ThreadTransferService", (it) => {
       };
       const { threadId } = yield* transfers.importThread(importInput);
       assert.isTrue(NodeFS.existsSync(rolloutPath));
+      // The existing checkout is already set up.
+      assert.deepEqual(setupRuns, []);
       const imported = yield* orchestrator.getThreadProjection(threadId);
       assert.equal(imported.thread.historyOrigin, "transfer");
       assert.deepEqual(imported.thread.transferredFrom, {
@@ -534,6 +547,8 @@ it.layer(TestLayer)("ThreadTransferService", (it) => {
       );
       assert.equal(imported.thread.projectId, clonedProject?.id);
       assert.isNull(imported.thread.worktreePath);
+      // A fresh clone has no dependencies yet, so the project's setup script runs there.
+      assert.deepEqual(setupRuns, [NodePath.join(projectsRoot, "repo")]);
     }),
   );
 });

@@ -9,6 +9,7 @@ import {
   NonNegativeInt,
   ProjectId,
   type ChatAttachment,
+  type ProjectScript,
   type OrchestrationV2AppThread,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ProviderThread,
@@ -51,6 +52,7 @@ import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterReg
 import * as ProviderSessionManager from "../orchestration-v2/ProviderSessionManager.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
+import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as RepositoryProjects from "../project/RepositoryProjects.ts";
 import * as ProviderRegistry from "../provider/Services/ProviderRegistry.ts";
@@ -156,6 +158,7 @@ const make = Effect.gen(function* () {
   const repositoryIdentity = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
   const git = yield* GitVcsDriver.GitVcsDriver;
   const repositoryProjects = yield* RepositoryProjects.RepositoryProjects;
+  const setupScripts = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
   const signed = <A, E>(
@@ -810,34 +813,67 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  /** Restarts the turn the transfer stopped on the source, best effort. */
-  const continueImportedWork = (input: {
+  /**
+   * Gets the imported thread going on its own: a new worktree or clone first
+   * runs the project's setup script, as a normal worktree launch does, then a
+   * turn the transfer stopped on the source restarts. Waiting for setup happens
+   * in the background so the import returns. Best effort, because the thread
+   * has already moved.
+   */
+  const resumeImportedThread = (input: {
     readonly threadId: ThreadId;
     readonly transferId: ThreadTransferId;
     readonly manifest: ThreadTransferManifest;
-  }) =>
-    input.manifest.source.wasWorking !== true
-      ? Effect.void
-      : threads
-          .dispatch({
-            type: "message.dispatch",
-            commandId: CommandId.make(`thread-transfer:${input.transferId}:continue`),
+    readonly project: {
+      readonly id: ProjectId;
+      readonly workspaceRoot: string;
+      readonly scripts: ReadonlyArray<ProjectScript>;
+    };
+    readonly cwd: string;
+    readonly freshWorkspace: boolean;
+  }) => {
+    const logFailure = Effect.catchCause((cause) =>
+      Effect.logWarning("Could not resume the transferred thread.", cause),
+    );
+    const continueWork =
+      input.manifest.source.wasWorking !== true
+        ? Effect.void
+        : threads
+            .dispatch({
+              type: "message.dispatch",
+              commandId: CommandId.make(`thread-transfer:${input.transferId}:continue`),
+              threadId: input.threadId,
+              messageId: MessageId.make(
+                `message:thread-transfer-continuation:${input.transferId}`,
+              ),
+              text: "Continue where you left off.",
+              attachments: [],
+              dispatchMode: { type: "start_immediately" },
+              createdBy: "agent",
+              creationSource: "server",
+            })
+            .pipe(Effect.asVoid);
+    return Effect.gen(function* () {
+      const setup = input.freshWorkspace
+        ? yield* setupScripts.runForThread({
             threadId: input.threadId,
-            messageId: MessageId.make(`message:thread-transfer-continuation:${input.transferId}`),
-            text: "Continue where you left off.",
-            attachments: [],
-            dispatchMode: { type: "start_immediately" },
-            createdBy: "agent",
-            creationSource: "server",
+            projectId: input.project.id,
+            projectCwd: input.project.workspaceRoot,
+            worktreePath: input.cwd,
+            project: input.project,
+            observeCompletion: {},
           })
-          .pipe(
-            // The thread already moved; failing here would leave the source locked
-            // over a message the user can send themselves.
-            Effect.tapCause((cause) =>
-              Effect.logWarning("Could not continue the transferred thread.", cause),
-            ),
-            Effect.ignore,
-          );
+        : null;
+      if (setup?.status === "started" && !setup.async && setup.completion !== undefined) {
+        // The agent continues even if setup fails; it can see and fix that itself.
+        yield* Effect.forkDetach(
+          setup.completion.pipe(Effect.andThen(continueWork), logFailure),
+        );
+        return;
+      }
+      yield* continueWork;
+    }).pipe(logFailure);
+  };
 
   const importThread: ThreadTransferServiceShape["importThread"] = Effect.fn(
     "ThreadTransferService.importThread",
@@ -864,7 +900,9 @@ const make = Effect.gen(function* () {
       .stat(paths.inBundle)
       .pipe(orFail("Could not read the bundle."))).size;
     let checks = yield* preflight({ manifest, bundleBytes: Number(bundleBytes) });
+    let cloned = false;
     if (checks.blockers.length === 0 && checks.newProject !== null) {
+      cloned = true;
       yield* repositoryProjects
         .ensure({ canonicalKey: manifest.repo.canonicalKey!, ...checks.newProject })
         .pipe(Effect.mapError((cause) => fail(cause.message, cause)));
@@ -1045,7 +1083,14 @@ const make = Effect.gen(function* () {
       },
     ];
     yield* eventSink.write({ events }).pipe(orFail("Could not save the imported thread."));
-    yield* continueImportedWork({ threadId, transferId: input.transferId, manifest });
+    yield* resumeImportedThread({
+        threadId,
+        transferId: input.transferId,
+        manifest,
+        project,
+        cwd: workspace.cwd,
+      freshWorkspace: cloned || workspacePlan.type === "worktree",
+    });
     yield* Effect.forEach(
       [paths.staging, paths.inBundle],
       (file) => fileSystem.remove(file, { recursive: true, force: true }).pipe(Effect.ignore),

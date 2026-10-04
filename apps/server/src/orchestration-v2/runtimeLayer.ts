@@ -245,6 +245,9 @@ const repositoryProjectsProvided = RepositoryProjects.layer.pipe(
     ),
   ),
 );
+export const ProjectSetupScriptRunnerLayerLive = projectSetupScriptRunnerLayer.pipe(
+  Layer.provide(ProjectServiceLayerLive),
+);
 const threadTransferProvided = ThreadTransferService.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
@@ -256,13 +259,11 @@ const threadTransferProvided = ThreadTransferService.layer.pipe(
       idAllocatorLayer,
       providerAdapterRegistryProvided,
       providerSessionManagerProvided,
+      ProjectSetupScriptRunnerLayerLive,
     ),
   ),
 );
 
-export const ProjectSetupScriptRunnerLayerLive = projectSetupScriptRunnerLayer.pipe(
-  Layer.provide(ProjectServiceLayerLive),
-);
 const managedProjectFoldersProvided = ManagedProjectFolders.layer.pipe(
   Layer.provide(ProjectServiceLayerLive),
 );

@@ -17,7 +17,8 @@ other. Keep both connected until the transfer finishes.
   destination has no project for it, it clones the source's `origin` remote into its projects folder
   and adds the project, using the destination's own Git credentials.
 - If the thread ran in its own worktree, the destination creates or reuses a worktree for its
-  branch. The branch does not need to be pushed.
+  branch. The branch does not need to be pushed. A new worktree or clone runs the project's setup
+  script, the one set to run on worktree creation, before the agent continues.
 - Sign in to the same provider on the destination. Claude and Codex threads can be transferred.
 
 The destination checks these before anything is copied.
