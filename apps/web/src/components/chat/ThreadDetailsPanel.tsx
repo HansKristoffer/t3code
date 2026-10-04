@@ -28,6 +28,7 @@ import { OpenInPicker } from "./OpenInPicker";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
+import { ThreadNewInWorkspacePanelRow } from "./ThreadNewInWorkspacePanelRow";
 import { ThreadTransferPanelRow } from "./ThreadTransferPanelRow";
 
 interface VersionMismatchIssue {
@@ -195,6 +196,12 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                   onDeleteScript={props.onDeleteProjectScript}
                 />
               ) : null}
+
+              {props.draftId ? null : (
+                <ThreadNewInWorkspacePanelRow
+                  threadRef={{ environmentId: props.environmentId, threadId: props.threadId }}
+                />
+              )}
 
               {props.draftId ? null : (
                 <ThreadTransferPanelRow
