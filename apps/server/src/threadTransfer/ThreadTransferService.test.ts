@@ -384,6 +384,7 @@ it.layer(TestLayer)("ThreadTransferService", (it) => {
         [["native", rollout]],
       );
       assert.equal(exported.manifest.itemCount, 4);
+      assert.isTrue(exported.manifest.source.wasWorking);
       const sourceRuns = (yield* orchestrator.getThreadProjection(sourceThreadId)).runs;
       assert.deepEqual(
         sourceRuns.map((run) => run.status),
@@ -435,13 +436,17 @@ it.layer(TestLayer)("ThreadTransferService", (it) => {
         environmentLabel: "Laptop",
       });
       assert.deepEqual(
-        imported.visibleTurnItems.map(({ item }) => [item.type, item.runId]),
-        [
-          ["user_message", null],
-          ["assistant_message", null],
-          ["user_message", null],
-          ["run_interrupt_result", null],
-        ],
+        imported.visibleTurnItems
+          .filter(({ item }) => item.runId === null)
+          .map(({ item }) => item.type),
+        ["user_message", "assistant_message", "user_message", "run_interrupt_result"],
+      );
+      // The source was working, so its copy picks the turn back up.
+      assert.deepEqual(
+        imported.messages
+          .filter((message) => message.id === "message:thread-transfer-continuation:t-1")
+          .map((message) => message.text),
+        ["Continue where you left off."],
       );
       const providerThread = imported.providerThreads.find(
         (thread) => thread.id === imported.thread.activeProviderThreadId,

@@ -1,6 +1,7 @@
 import {
   CommandId,
   EventId,
+  MessageId,
   THREAD_TRANSFER_MAX_BUNDLE_BYTES,
   ThreadId,
   ThreadTransferError,
@@ -60,6 +61,7 @@ import {
   writeBundle,
   type BundleSourceFile,
 } from "./ThreadTransferBundle.ts";
+import { applyCodeSnapshot, fetchCodeSnapshot, pushCodeSnapshot } from "./ThreadTransferCode.ts";
 import { issueThreadTransferUploadUrl, threadTransferPaths } from "./ThreadTransferFiles.ts";
 import { attachmentsOf, exportableTurnItems, importedHistory } from "./ThreadTransferHistory.ts";
 
@@ -168,11 +170,19 @@ const make = Effect.gen(function* () {
     threadTransferPaths(config.stateDir, path, transferId);
 
   /** A git command's trimmed stdout, or null when it failed. Transfers read repos best effort. */
-  const gitOutput = (cwd: string, args: ReadonlyArray<string>) =>
-    git.execute({ operation: "ThreadTransferService", cwd, args, allowNonZeroExit: true }).pipe(
-      Effect.map((result) => (Number(result.exitCode) === 0 ? result.stdout.trim() : null)),
-      Effect.orElseSucceed(() => null),
-    );
+  const gitOutput = (cwd: string, args: ReadonlyArray<string>, env?: NodeJS.ProcessEnv) =>
+    git
+      .execute({
+        operation: "ThreadTransferService",
+        cwd,
+        args,
+        allowNonZeroExit: true,
+        ...(env === undefined ? {} : { env: { ...process.env, ...env } }),
+      })
+      .pipe(
+        Effect.map((result) => (Number(result.exitCode) === 0 ? result.stdout.trim() : null)),
+        Effect.orElseSucceed(() => null),
+      );
 
   const getProject = (projectId: ProjectId) =>
     projects.getById(projectId).pipe(
@@ -206,8 +216,27 @@ const make = Effect.gen(function* () {
       { discard: true },
     );
 
+  /** Deletes the code snapshot the export pushed; the destination has fetched it or never will. */
+  const deleteSnapshot = (input: {
+    readonly threadId: ThreadId;
+    readonly transferId: ThreadTransferId;
+  }) =>
+    Effect.gen(function* () {
+      const cached = yield* fileSystem.readFileString(pathsFor(input.transferId).outResult).pipe(
+        Effect.map(decodeCachedExport),
+        Effect.orElseSucceed(() => Option.none()),
+      );
+      const snapshot = Option.isSome(cached) ? cached.value.manifest.repo.snapshot : null;
+      if (snapshot == null) return;
+      const thread = yield* orchestrator.getThreadShell(input.threadId);
+      if (thread === null) return;
+      const cwd = thread.worktreePath ?? (yield* getProject(thread.projectId)).workspaceRoot;
+      yield* gitOutput(cwd, ["push", "--no-verify", "origin", "--delete", snapshot.ref]);
+    }).pipe(Effect.ignore);
+
   const abort: ThreadTransferServiceShape["abort"] = Effect.fn("ThreadTransferService.abort")(
     function* (input) {
+      yield* deleteSnapshot(input);
       yield* dispatch({
         type: "thread.transfer-out.abort",
         commandId: CommandId.make(`thread-transfer:${input.transferId}:abort`),
@@ -228,10 +257,14 @@ const make = Effect.gen(function* () {
       transferId: input.transferId,
       destination: input.destination,
     });
+    yield* deleteSnapshot(input);
     yield* removeExport(input.transferId);
   });
 
-  /** Cancels queued messages and interrupts the running turn, so the thread can be locked. */
+  /**
+   * Cancels queued messages and interrupts the running turn, so the thread
+   * can be locked. True when it stopped a turn the destination should continue.
+   */
   const stopWork = Effect.fn("ThreadTransferService.stopWork")(function* (input: {
     readonly projectId: ProjectId;
     readonly threadId: ThreadId;
@@ -257,7 +290,7 @@ const make = Effect.gen(function* () {
         reason: "Transferring the thread to another environment.",
       })
       .pipe(orFail("Could not stop the thread."));
-    if (interrupted.type !== "interrupt_requested") return;
+    if (interrupted.type !== "interrupt_requested") return false;
     const waited = yield* threads
       .waitForThread({
         projectId: input.projectId,
@@ -269,6 +302,7 @@ const make = Effect.gen(function* () {
     if (waited.timedOut) {
       return yield* fail("The thread did not stop in time. Try again.");
     }
+    return true;
   });
 
   const readRepoState = Effect.fn("ThreadTransferService.readRepoState")(function* (
@@ -339,13 +373,13 @@ const make = Effect.gen(function* () {
     const project = yield* getProject(thread.projectId);
     const cwd = thread.worktreePath ?? project.workspaceRoot;
 
-    if (thread.transfer == null) {
-      yield* stopWork({
+    const wasWorking =
+      thread.transfer == null &&
+      (yield* stopWork({
         projectId: thread.projectId,
         threadId: input.threadId,
         transferId: input.transferId,
-      });
-    }
+      }));
     yield* dispatch({
       type: "thread.transfer-out.begin",
       commandId: CommandId.make(`thread-transfer:${input.transferId}:begin`),
@@ -405,6 +439,19 @@ const make = Effect.gen(function* () {
       const provider = (yield* providerRegistry.getProviders).find(
         (candidate) => candidate.instanceId === providerThread.providerInstanceId,
       );
+      const repoState = yield* readRepoState(cwd, thread.worktreePath !== null, project.title);
+      const repo = {
+        ...repoState,
+        snapshot: yield* pushCodeSnapshot({
+          git: gitOutput,
+          fileSystem,
+          path,
+          cwd,
+          transferId: input.transferId,
+          headSha: repoState.headSha,
+          dirty: repoState.dirtyFileCount > 0,
+        }),
+      };
       const manifest: ThreadTransferManifest = {
         version: 1,
         transferId: input.transferId,
@@ -420,8 +467,9 @@ const make = Effect.gen(function* () {
           providerVersion: provider?.version ?? null,
           nativeThreadRef: providerThread.nativeThreadRef!,
           nativeConversationHeadRef: providerThread.nativeConversationHeadRef,
+          wasWorking,
         },
-        repo: yield* readRepoState(cwd, thread.worktreePath !== null, project.title),
+        repo,
         itemCount: items.length,
         files: yield* Effect.tryPromise({
           try: () => describeFiles(files),
@@ -516,7 +564,8 @@ const make = Effect.gen(function* () {
               : "The repository has no origin remote to clone. Add it as a project on this environment first.",
         });
       }
-      if (manifest.repo.dirtyFileCount > 0) {
+      // A snapshot goes onto the fresh clone; the import plans that after cloning.
+      if (manifest.repo.dirtyFileCount > 0 && manifest.repo.snapshot == null) {
         const count = manifest.repo.dirtyFileCount;
         warnings.push({
           code: "source_dirty",
@@ -536,8 +585,17 @@ const make = Effect.gen(function* () {
 
     const root = project.workspaceRoot;
     const branch = manifest.repo.branch;
+    const sourceSha = manifest.repo.headSha;
+    const snapshot = manifest.repo.snapshot ?? null;
+    const hasCommit = (sha: string) =>
+      gitOutput(root, ["cat-file", "-e", `${sha}^{commit}`]).pipe(
+        Effect.map((output) => output !== null),
+      );
+    // The snapshot's ancestry holds the source's commits, pushed or not.
+    const snapshotHere = snapshot !== null && (yield* fetchCodeSnapshot(gitOutput, root, snapshot));
     let workspace: ThreadTransferWorkspace = { type: "root" };
     let compareRef = "HEAD";
+    let checkoutDiffers = false;
     if (branch !== null && manifest.repo.worktree) {
       const existing = yield* findWorktree(root, branch);
       const realRoot = yield* fileSystem.realPath(root).pipe(Effect.orElseSucceed(() => root));
@@ -565,6 +623,10 @@ const make = Effect.gen(function* () {
         ) {
           workspace = { type: "worktree", branch, startRef: `origin/${branch}` };
           compareRef = `refs/remotes/origin/${branch}`;
+        } else if (snapshotHere && sourceSha !== null) {
+          // The branch was never pushed; the snapshot brought its commits.
+          workspace = { type: "worktree", branch, startRef: sourceSha };
+          compareRef = sourceSha;
         } else {
           blockers.push({
             code: "branch_missing",
@@ -575,6 +637,7 @@ const make = Effect.gen(function* () {
     } else if (branch !== null) {
       const rootBranch = yield* gitOutput(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
       if (rootBranch !== branch) {
+        checkoutDiffers = true;
         warnings.push({
           code: "checkout_differs",
           message: `This environment's checkout is on '${rootBranch ?? "a detached HEAD"}'; the thread ran on '${branch}'.`,
@@ -582,53 +645,94 @@ const make = Effect.gen(function* () {
       }
     }
 
-    let canFastForward = false;
-    const sourceSha = manifest.repo.headSha;
+    // Where the destination stands relative to the source commit.
+    let relation: "same" | "behind" | "ahead" | "diverged" | "unknown" = "unknown";
+    let distance = 0;
     const targetSha = yield* gitOutput(root, ["rev-parse", "--verify", "--quiet", compareRef]);
-    if (sourceSha !== null && targetSha !== null && targetSha !== sourceSha) {
-      const hasCommit = gitOutput(root, ["cat-file", "-e", `${sourceSha}^{commit}`]).pipe(
-        Effect.map((output) => output !== null),
-      );
-      if (!(yield* hasCommit) && branch !== null)
-        yield* gitOutput(root, ["fetch", "origin", branch]);
-      const known = yield* hasCommit;
-      const isAncestor = (ancestor: string, descendant: string) =>
-        gitOutput(root, ["merge-base", "--is-ancestor", ancestor, descendant]).pipe(
-          Effect.map((output) => output !== null),
-        );
-      const count = (from: string, to: string) =>
-        gitOutput(root, ["rev-list", "--count", `${from}..${to}`]).pipe(
-          Effect.map((output) => Number(output ?? 0)),
-        );
-      const plural = (n: number) => (n === 1 ? "commit" : "commits");
-      if (known && (yield* isAncestor(targetSha, sourceSha))) {
-        const behind = yield* count(targetSha, sourceSha);
-        canFastForward = true;
-        warnings.push({
-          code: "head_differs",
-          message: `This environment is ${behind} ${plural(behind)} behind the source.`,
-        });
-      } else if (known && (yield* isAncestor(sourceSha, targetSha))) {
-        const ahead = yield* count(sourceSha, targetSha);
-        warnings.push({
-          code: "head_differs",
-          message: `This environment is ${ahead} ${plural(ahead)} ahead of the source.`,
-        });
+    if (sourceSha !== null && targetSha !== null) {
+      if (targetSha === sourceSha) {
+        relation = "same";
       } else {
-        warnings.push({
-          code: "head_differs",
-          message: known
-            ? "This environment's checkout has diverged from the source."
-            : "The source's latest commit is not on this environment. Push it from the source to match.",
-        });
+        if (!(yield* hasCommit(sourceSha)) && branch !== null) {
+          yield* gitOutput(root, ["fetch", "origin", branch]);
+        }
+        const isAncestor = (ancestor: string, descendant: string) =>
+          gitOutput(root, ["merge-base", "--is-ancestor", ancestor, descendant]).pipe(
+            Effect.map((output) => output !== null),
+          );
+        const count = (from: string, to: string) =>
+          gitOutput(root, ["rev-list", "--count", `${from}..${to}`]).pipe(
+            Effect.map((output) => Number(output ?? 0)),
+          );
+        if (!(yield* hasCommit(sourceSha))) {
+          relation = "unknown";
+        } else if (yield* isAncestor(targetSha, sourceSha)) {
+          relation = "behind";
+          distance = yield* count(targetSha, sourceSha);
+        } else if (yield* isAncestor(sourceSha, targetSha)) {
+          relation = "ahead";
+          distance = yield* count(sourceSha, targetSha);
+        } else {
+          relation = "diverged";
+        }
       }
     }
-    if (manifest.repo.dirtyFileCount > 0) {
-      const count = manifest.repo.dirtyFileCount;
+
+    // The destination takes the source's code only when that loses nothing
+    // here: same branch, not ahead or apart, and no uncommitted changes.
+    const checkoutCwd =
+      workspace.type === "root"
+        ? root
+        : workspace.type === "existing_worktree"
+          ? workspace.worktreePath
+          : null;
+    const checkoutClean =
+      checkoutCwd === null || (yield* gitOutput(checkoutCwd, ["status", "--porcelain"])) === "";
+    const carriesSourceCode =
+      snapshotHere &&
+      blockers.length === 0 &&
+      !checkoutDiffers &&
+      (relation === "same" || relation === "behind") &&
+      checkoutClean;
+    if (snapshotHere && !checkoutClean && !checkoutDiffers) {
       warnings.push({
-        code: "source_dirty",
-        message: `The source has ${count} uncommitted ${count === 1 ? "file" : "files"}, which are not transferred.`,
+        code: "checkout_differs",
+        message:
+          "This environment's checkout has uncommitted changes, so the source's code is not applied.",
       });
+    }
+
+    const plural = (n: number) => (n === 1 ? "commit" : "commits");
+    if (!carriesSourceCode) {
+      if (relation === "behind") {
+        warnings.push({
+          code: "head_differs",
+          message: `This environment is ${distance} ${plural(distance)} behind the source.`,
+        });
+      } else if (relation === "ahead") {
+        warnings.push({
+          code: "head_differs",
+          message: `This environment is ${distance} ${plural(distance)} ahead of the source.`,
+        });
+      } else if (relation === "diverged") {
+        warnings.push({
+          code: "head_differs",
+          message: "This environment's checkout has diverged from the source.",
+        });
+      } else if (relation === "unknown" && sourceSha !== null && targetSha !== null) {
+        warnings.push({
+          code: "head_differs",
+          message:
+            "The source's latest commit is not on this environment. Push it from the source to match.",
+        });
+      }
+      if (manifest.repo.dirtyFileCount > 0) {
+        const count = manifest.repo.dirtyFileCount;
+        warnings.push({
+          code: "source_dirty",
+          message: `The source has ${count} uncommitted ${count === 1 ? "file" : "files"}, which are not transferred.`,
+        });
+      }
     }
     return {
       blockers,
@@ -637,7 +741,8 @@ const make = Effect.gen(function* () {
       newProject: null,
       instanceId: provider?.instanceId ?? null,
       workspace,
-      canFastForward,
+      canFastForward: !carriesSourceCode && relation === "behind",
+      carriesSourceCode,
     };
   });
 
@@ -705,6 +810,35 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  /** Restarts the turn the transfer stopped on the source, best effort. */
+  const continueImportedWork = (input: {
+    readonly threadId: ThreadId;
+    readonly transferId: ThreadTransferId;
+    readonly manifest: ThreadTransferManifest;
+  }) =>
+    input.manifest.source.wasWorking !== true
+      ? Effect.void
+      : threads
+          .dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make(`thread-transfer:${input.transferId}:continue`),
+            threadId: input.threadId,
+            messageId: MessageId.make(`message:thread-transfer-continuation:${input.transferId}`),
+            text: "Continue where you left off.",
+            attachments: [],
+            dispatchMode: { type: "start_immediately" },
+            createdBy: "agent",
+            creationSource: "server",
+          })
+          .pipe(
+            // The thread already moved; failing here would leave the source locked
+            // over a message the user can send themselves.
+            Effect.tapCause((cause) =>
+              Effect.logWarning("Could not continue the transferred thread.", cause),
+            ),
+            Effect.ignore,
+          );
+
   const importThread: ThreadTransferServiceShape["importThread"] = Effect.fn(
     "ThreadTransferService.importThread",
   )(function* (input) {
@@ -760,7 +894,10 @@ const make = Effect.gen(function* () {
     }
 
     const workspace = yield* realizeWorkspace(project.workspaceRoot, workspacePlan);
-    if (input.fastForwardToSource && manifest.repo.headSha !== null) {
+    const snapshot = manifest.repo.snapshot ?? null;
+    if (checks.carriesSourceCode === true && snapshot != null && manifest.repo.headSha !== null) {
+      yield* applyCodeSnapshot(gitOutput, workspace.cwd, manifest.repo.headSha, snapshot);
+    } else if (input.fastForwardToSource && manifest.repo.headSha !== null) {
       const merged = yield* gitOutput(workspace.cwd, ["merge", "--ff-only", manifest.repo.headSha]);
       if (merged === null) {
         return yield* fail(
@@ -908,6 +1045,7 @@ const make = Effect.gen(function* () {
       },
     ];
     yield* eventSink.write({ events }).pipe(orFail("Could not save the imported thread."));
+    yield* continueImportedWork({ threadId, transferId: input.transferId, manifest });
     yield* Effect.forEach(
       [paths.staging, paths.inBundle],
       (file) => fileSystem.remove(file, { recursive: true, force: true }).pipe(Effect.ignore),

@@ -209,7 +209,7 @@ function ThreadTransferDialog({ request }: { readonly request: Request }) {
         <DialogHeader>
           <DialogTitle>Transfer thread</DialogTitle>
           <DialogDescription>
-            {`Move “${thread?.title ?? "this thread"}” and its agent session to another environment. If the agent is working, it stops first. The thread continues there, and this copy becomes read-only.`}
+            {`Move “${thread?.title ?? "this thread"}” and its agent session to another environment. If the agent is working, it pauses here and picks up again there. This copy becomes read-only.`}
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
@@ -367,7 +367,7 @@ function TransferReview(props: {
       ) : null}
       {preflight.blockers.length === 0 ? (
         <p className="text-muted-foreground">
-          {`Diffs and rewinds for earlier turns, uncommitted changes, and running background tasks stay on ${props.sourceLabel}.`}
+          {`Diffs and rewinds for earlier turns and running background tasks stay on ${props.sourceLabel}.`}
         </p>
       ) : null}
     </>
