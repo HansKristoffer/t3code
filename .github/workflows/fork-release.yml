@@ -129,6 +129,9 @@ jobs:
         run: |
           set -euo pipefail
           cd assets
+          # Artifacts keep their release/ and release-cli/ folders; the release wants flat files.
+          find . -mindepth 2 -type f -exec mv -t . {} +
+          find . -mindepth 1 -type d -empty -delete
           sha256sum -- * > SHA256SUMS
           gh release create "v$VERSION" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
             --title "T3 Code v$VERSION (fork)" \
