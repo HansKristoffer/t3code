@@ -1,0 +1,136 @@
+name: Fork release
+
+# Builds this fork for your own machines and attaches it to a GitHub release
+# here: an unsigned macOS arm64 DMG plus the t3 CLI archives for macOS arm64
+# and Linux x64.
+#
+# Versions are `<upstream version>-preview.<date>.<run>`. The preview
+# identifier gives the desktop app no update feed (an unsigned macOS app
+# cannot install updates) and keeps the version apart from upstream's.
+#
+# A server installs or updates from these releases with
+#   T3CODE_RELEASE_BASE_URL=https://github.com/<owner>/<repo>/releases/download
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: fork-release
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    if: github.repository != 'pingdotgg/t3code'
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: version
+        run: |
+          base="$(node -p 'require("./apps/server/package.json").version')"
+          echo "version=${base%%-*}-preview.$(date -u +%Y%m%d).${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            platform: mac
+            arch: arm64
+            rust_target: aarch64-apple-darwin
+            resource_key: darwin-arm64
+            desktop_target: dmg
+          - runner: ubuntu-24.04
+            platform: linux
+            arch: x64
+            rust_target: x86_64-unknown-linux-gnu
+            resource_key: linux-x64
+    runs-on: ${{ matrix.runner }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Install Linux build libraries
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
+
+      - run: vp install
+      - run: node scripts/update-release-package-versions.ts "$VERSION"
+      - run: vp run build:desktop
+
+      - name: Build desktop app
+        if: matrix.desktop_target
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: >-
+          vp run dist:desktop:artifact
+          --platform ${{ matrix.platform }} --target ${{ matrix.desktop_target }} --arch ${{ matrix.arch }}
+          --build-version "$VERSION" --skip-build --output-dir release
+
+      - name: Build resource monitor
+        if: ${{ !matrix.desktop_target }}
+        run: cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml --target ${{ matrix.rust_target }}
+
+      # Keep VP_NODE_VERSION in step with SEA_NODE_VERSION in apps/server/vite.config.ts.
+      - name: Build CLI archive
+        env:
+          VP_NODE_VERSION: "26.8.2"
+        run: |
+          set -euo pipefail
+          node apps/server/scripts/cli.ts build-exe
+          monitor="$RUNNER_TEMP/resource-monitor/${{ matrix.resource_key }}"
+          mkdir -p "$monitor"
+          cp "native/resource-monitor/target/${{ matrix.rust_target }}/release/t3-resource-monitor" "$monitor/"
+          node scripts/build-cli-archive.ts --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} \
+            --version "$VERSION" --resource-monitor-dir "$RUNNER_TEMP/resource-monitor" --output-dir release-cli
+          node scripts/smoke-cli-archive.ts --archive release-cli/* --expect-version "$VERSION"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            release/*.dmg
+            release-cli/*
+          if-no-files-found: error
+
+  release:
+    needs: [version, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Publish release
+        run: |
+          set -euo pipefail
+          cd assets
+          sha256sum -- * > SHA256SUMS
+          gh release create "v$VERSION" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
+            --title "T3 Code v$VERSION (fork)" \
+            --notes "Built from $GITHUB_SHA. Unsigned: on macOS, right-click the app and choose Open the first time." \
+            -- *

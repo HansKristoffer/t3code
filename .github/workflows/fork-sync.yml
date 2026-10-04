@@ -1,0 +1,41 @@
+name: Fork sync
+
+# Keeps this fork's main in step with pingdotgg/t3code. A push to main then
+# starts Fork release. A merge conflict fails the run, so GitHub emails you.
+#
+# Needs the secret FORK_SYNC_TOKEN: a fine-grained token for this repository
+# with Contents, Workflows and Actions set to read and write. GITHUB_TOKEN can
+# neither push the upstream workflow changes a sync brings in nor start the
+# release workflow with its push.
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: fork-sync
+
+jobs:
+  sync:
+    if: github.repository != 'pingdotgg/t3code'
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ secrets.FORK_SYNC_TOKEN }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Merge upstream main
+        run: gh repo sync "$REPO" --branch main
+
+      # Upstream's workflows expect its runners and secrets, so here they only
+      # queue or fail. Anything not named fork-* stays off, including
+      # workflows upstream adds later.
+      - name: Disable upstream workflows
+        run: |
+          gh workflow list -R "$REPO" --all --json path,state \
+            --jq '.[] | select(.state == "active") | .path | select(startswith(".github/workflows/")) | select(test("/fork-[^/]+$") | not)' |
+            while read -r path; do
+              gh workflow disable -R "$REPO" "${path##*/}" || true
+            done
