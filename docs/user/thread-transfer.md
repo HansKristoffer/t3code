@@ -15,14 +15,25 @@ other. Keep both connected until the transfer finishes.
 - Only threads in a Git repository can move. Transfers match projects by repository. When the
   destination has no project for it, it clones the source's `origin` remote into its projects folder
   and adds the project, using the destination's own Git credentials.
-- If the thread ran in its own worktree, push its branch, or check it out on the destination. The
-  destination creates or reuses a worktree for that branch.
+- If the thread ran in its own worktree, the destination creates or reuses a worktree for its
+  branch. The branch does not need to be pushed.
 - Sign in to the same provider on the destination. Claude and Codex threads can be transferred.
 
-The destination checks these before anything is copied. It also warns when its checkout is
-behind, ahead of, or different from the source, or when the source has uncommitted changes. When
-the destination is only behind, you can fast-forward it to the source's commit as part of the
-transfer.
+The destination checks these before anything is copied.
+
+## Your code comes along
+
+The thread continues on the same code it had. The source pushes its unpushed commits and
+uncommitted files to a temporary ref on `origin`, without pushing or changing its branch. The
+destination moves its checkout to the source's commit and restores those files as uncommitted
+changes. The temporary ref is deleted when the transfer finishes. Files your `.gitignore` excludes,
+such as `.env`, are not carried.
+
+The destination keeps its own code instead, and warns you, when its checkout has uncommitted
+changes, is on another branch, or has commits the source does not. If the source cannot push, for
+example without write access to `origin`, the destination warns about what stays behind. When the
+destination is only behind,
+you can still fast-forward it to the source's commit as part of the transfer.
 
 ## After transferring
 
@@ -33,7 +44,6 @@ copy. To move the thread back, transfer the copy.
 These stay on the source:
 
 - Diffs and rewinds for turns before the transfer
-- Uncommitted changes
 - Running background tasks and machine-local MCP servers
 
 ## If a transfer does not finish

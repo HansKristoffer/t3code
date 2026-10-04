@@ -177,7 +177,7 @@ export async function transferThreadFromMobile(input: {
                 `${target.label} doesn't have the repository yet. It will clone ${prepared.preflight.newProject.remoteUrl} and add it as a project.`,
               ]),
           ...warnings.map((warning) => warning.message),
-          `Diffs and rewinds for earlier turns, uncommitted changes, and running background tasks stay on ${sourceLabel}.`,
+          `Diffs and rewinds for earlier turns and running background tasks stay on ${sourceLabel}.`,
         ].join("\n\n"),
         [
           { text: "Cancel", value: null, style: "cancel" as const },

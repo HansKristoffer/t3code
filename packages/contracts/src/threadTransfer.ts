@@ -59,6 +59,21 @@ export const ThreadTransferManifest = Schema.Struct({
     dirtyFileCount: NonNegativeInt,
     /** The source thread ran in its own worktree rather than the project checkout. */
     worktree: Schema.Boolean,
+    /**
+     * The source's code, pushed to a hidden ref on `origin` so the destination
+     * continues on it without the branch being pushed: `sha` is `headSha`
+     * when the checkout was clean, otherwise a child commit holding the
+     * uncommitted files. Null when there was nothing to carry or the push failed.
+     */
+    snapshot: Schema.optional(
+      Schema.NullOr(
+        Schema.Struct({
+          ref: TrimmedNonEmptyString,
+          sha: TrimmedNonEmptyString,
+          uncommitted: Schema.Boolean,
+        }),
+      ),
+    ),
   }),
   itemCount: NonNegativeInt,
   files: Schema.Array(ThreadTransferFile),
@@ -134,6 +149,8 @@ export const ThreadTransferPreflightResult = Schema.Struct({
   workspace: Schema.NullOr(ThreadTransferWorkspace),
   /** The destination checkout is merely behind the source commit and can fast-forward to it. */
   canFastForward: Schema.Boolean,
+  /** The import puts the destination on the source's code, uncommitted files included. */
+  carriesSourceCode: Schema.optional(Schema.Boolean),
 });
 export type ThreadTransferPreflightResult = typeof ThreadTransferPreflightResult.Type;
 

@@ -367,7 +367,7 @@ function TransferReview(props: {
       ) : null}
       {preflight.blockers.length === 0 ? (
         <p className="text-muted-foreground">
-          {`Diffs and rewinds for earlier turns, uncommitted changes, and running background tasks stay on ${props.sourceLabel}.`}
+          {`Diffs and rewinds for earlier turns and running background tasks stay on ${props.sourceLabel}.`}
         </p>
       ) : null}
     </>
